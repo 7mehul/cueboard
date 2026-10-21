@@ -1,0 +1,85 @@
+/* The in-call window. It loads the board's own stylesheet first, so its cards are the board's
+   cards; these rules fit them into one narrow column on the board's dotted ground, and add the
+   window's few controls, which stay out of sight until the pointer is over the window. */
+html,body{height:100%;margin:0;overflow:hidden}
+body{background-color:var(--ground);background-image:radial-gradient(circle,var(--dot) 1px,transparent 1.3px);background-size:20px 20px;color:var(--ink);font-family:var(--f-body)}
+[hidden]{display:none!important}
+#fl{position:relative;display:flex;flex-direction:column;height:100%}
+
+.fl-prog{position:absolute;left:0;right:0;top:0;height:3px;z-index:4}
+.fl-prog i{display:block;height:100%;width:0;background:var(--accent);border-radius:0 2px 2px 0;transition:width .9s linear}
+.fl-prog.over i{background:var(--bad)}
+
+.fl-top{position:relative;z-index:3;display:flex;align-items:center;gap:6px;padding:12px 12px 8px;flex:none}
+.fl-time{appearance:none;height:28px;padding:0 12px;border-radius:999px;border:1px solid var(--line);background:var(--chrome);box-shadow:var(--shadow);font:500 12px var(--f-mono);font-variant-numeric:tabular-nums;color:var(--muted);cursor:pointer;white-space:nowrap}
+.fl-time:hover,.fl-time.run{color:var(--ink)}
+.fl-time.over{color:var(--bad)}
+.fl-ctl{margin-left:auto;display:flex;gap:1px;padding:2px;border-radius:999px;border:1px solid var(--line);background:var(--chrome);box-shadow:var(--shadow);opacity:0;transition:opacity .15s}
+#fl:hover .fl-ctl,.fl-ctl:focus-within{opacity:1}
+.fl-btn{appearance:none;width:28px;height:28px;padding:0;border:0;border-radius:50%;background:transparent;color:var(--muted);display:grid;place-items:center;cursor:pointer}
+.fl-btn .ic{width:16px;height:16px}
+.fl-btn:hover{background:var(--raised);color:var(--ink)}
+.fl-btn[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent)}
+/* Hidden: the window is a pill with the timer and Show. */
+.fl-show{appearance:none;margin-left:auto;display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 12px 0 8px;border-radius:999px;border:1px solid var(--line);background:var(--chrome);box-shadow:var(--shadow);color:var(--ink);font:500 12.5px var(--f-body);cursor:pointer;white-space:nowrap}
+.fl-show .ic{width:15px;height:15px;transform:rotate(180deg)}
+.fl-show:hover{border-color:var(--accent);color:var(--accent)}
+#fl.veiled .fl-top{padding:8px 8px 8px 10px}
+#fl.veiled .fl-prog{display:none}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* First open: a sticky note about screen sharing. */
+.fl-tip{display:flex;gap:10px;align-items:flex-start;margin:0 12px 10px;padding:11px 12px 12px 14px;border-radius:5px;background:var(--note-yellow);color:var(--note-ink);box-shadow:var(--note-shadow);font-size:13px;line-height:1.4;flex:none}
+.fl-tip button{appearance:none;flex:none;border:0;border-radius:6px;padding:4px 9px;background:rgba(0,0,0,.08);color:inherit;font:600 12px var(--f-body);cursor:pointer}
+.fl-tip button:hover{background:rgba(0,0,0,.14)}
+
+.fl-findbar{display:flex;align-items:center;gap:8px;margin:0 12px 10px;height:38px;padding:0 14px;border-radius:999px;border:1px solid var(--line);background:var(--chrome);box-shadow:var(--shadow);color:var(--faint);flex:none}
+.fl-findbar:focus-within{border-color:var(--accent)}
+.fl-findbar .ic{width:16px;height:16px}
+.fl-findbar input{flex:1;min-width:0;border:0;outline:0;background:transparent;color:var(--ink);font:inherit;font-size:14.5px}
+.fl-findbar input::placeholder{color:var(--faint)}
+
+/* The board's cards, one column; numbers pair up side by side. */
+.fl-scroll{flex:1;min-height:0;overflow-y:auto;padding:2px 12px 18px;scrollbar-width:thin;scrollbar-color:var(--line) transparent}
+.fl-stack{--z:1;zoom:.86;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-flow:row dense;gap:14px}
+.fl-stack > .el{position:relative!important;left:auto!important;top:auto!important;width:auto!important;height:auto!important;min-height:0!important;transform:none!important;grid-column:span 2;cursor:default;outline:none!important;user-select:text;-webkit-user-select:text;scroll-margin-top:10px}
+.fl-stack > .el-stat{grid-column:span 1}
+.fl-stack > .el:has(.fl-src){cursor:pointer}
+.fl-stack > .el.miss{display:none}
+.fl-stack .stat-value{font-size:36px}
+.fl-stack .f:empty,.fl-stack .ln:has(> .ln-text:empty),.fl-stack .items li:has(.item-text:empty){display:none}
+.fl-stack .f.hit{background:color-mix(in srgb,var(--accent) 18%,transparent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 18%,transparent);border-radius:3px}
+.fl-stack > .el.fl-flash{animation:fl-flash 1s ease-out}
+@keyframes fl-flash{0%{box-shadow:0 0 0 3px var(--accent)}100%{box-shadow:0 0 0 3px transparent}}
+.fl-qb{flex:1;min-width:0;display:flex;flex-direction:column}
+
+/* Where a line came from: click a card, or S for all; numbers always show theirs. */
+.fl-src{display:none;margin-top:3px;font:400 12.5px/1.35 var(--f-body);letter-spacing:0;text-transform:none;color:var(--faint)}
+.fl-src a{color:var(--accent);text-decoration:none}
+.fl-src a:hover{text-decoration:underline}
+.fl-src.on,.el.fl-open .fl-src,#fl.cites .fl-src{display:block}
+.el-note .fl-src{color:rgba(0,0,0,.5);font-size:13px}
+.el-note .fl-src a{color:inherit;text-decoration:underline}
+
+/* Compact: one card with the goal and, large, the next question. */
+.fl-compact{display:flex;flex-direction:column;gap:6px;margin:0 12px 12px;padding:14px 16px 15px;border-radius:12px;border:1px solid var(--line);background:var(--surface);box-shadow:var(--shadow);flex:none}
+.fl-k{font:500 10.5px var(--f-mono);letter-spacing:.07em;text-transform:uppercase;color:var(--faint)}
+.fl-cgoal{display:flex;gap:8px;align-items:baseline;padding-bottom:8px;margin-bottom:2px;border-bottom:1px solid var(--line);font-size:13.5px;line-height:1.35;color:var(--muted)}
+.fl-cgoal .fl-k{flex:none}
+.fl-cgoal.sug .v{text-decoration:underline dotted var(--accent);text-underline-offset:3px}
+.fl-cq{font:600 20px/1.28 var(--f-display);letter-spacing:-.01em;color:var(--ink);text-wrap:pretty}
+.fl-cq.gap{color:var(--muted)}
+.fl-crow{display:flex;align-items:center;gap:10px;margin-top:6px;min-width:0}
+.fl-asked{appearance:none;flex:none;display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px 0 9px;border-radius:999px;border:1px solid var(--line);background:var(--raised);color:var(--ink);font:500 13px var(--f-body);cursor:pointer}
+.fl-asked .ic{width:15px;height:15px;color:var(--good)}
+.fl-asked:hover{border-color:var(--good)}
+.fl-cask{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;color:var(--muted)}
+
+/* Jotting a note: a sticky at the bottom, like adding one to the board. */
+.fl-note{display:flex;align-items:center;gap:8px;margin:0 12px 12px;padding:11px 14px;border-radius:5px;background:var(--note-yellow);color:var(--note-ink);box-shadow:var(--note-shadow);flex:none}
+.fl-note input{flex:1;min-width:0;border:0;outline:0;background:transparent;color:inherit;font:500 15px var(--f-body)}
+.fl-note input::placeholder{color:rgba(0,0,0,.42)}
+.fl-ok{font:600 12px var(--f-body);color:var(--tag-mint)}
+
+.fl-empty{padding:20px 8px;text-align:center;font-size:13.5px;color:var(--muted)}
+@media (prefers-reduced-motion: reduce){.fl-prog i{transition:none}.fl-stack > .el.fl-flash{animation:none}}

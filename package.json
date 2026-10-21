@@ -1,0 +1,20 @@
+{
+  "name": "cueboard-engine",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test \"test/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
+    "scale": "node scripts/scale.ts",
+    "gallery": "node scripts/gallery.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.136.0",
+    "zod": "^4.6.7"
+  }
+}

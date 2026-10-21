@@ -1,0 +1,121 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Cueboard</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@500;600;700&family=Hanken+Grotesk:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style id="board-css">
+/*CSS*/
+</style>
+<style id="float-css" media="not all">
+/*FLOATCSS*/
+</style>
+
+<div id="app">
+  <main id="stage">
+    <div id="canvas" aria-label="Board canvas"><div id="world"></div></div>
+
+    <div id="empty" hidden>
+      <div class="empty-card" aria-labelledby="empty-h">
+        <div class="eyebrow">New board</div>
+        <h2 id="empty-h">What’s the meeting?</h2>
+        <p id="empty-p">Who you’re meeting, what you want out of it, and anything you already know. Claude lays out a first draft you can move around.</p>
+        <textarea id="empty-in" rows="4" placeholder="e.g. Partnership call with the ops lead at a regional grocery chain. I want to understand their delivery costs and get a pilot on the calendar."></textarea>
+        <div class="empty-row">
+          <button class="btn primary" id="empty-go" type="button"><span data-ic="spark"></span>Draft my board</button>
+          <button class="btn" id="empty-paste" type="button"><span data-ic="note"></span>Paste emails and notes</button>
+          <button class="btn" id="empty-sample" type="button"><span data-ic="calendar"></span>Use a sample meeting</button>
+          <button class="btn" id="empty-skip" type="button">Start blank</button>
+        </div>
+        <p class="empty-hint">Or double-click anywhere on the canvas to drop a note. Drag on empty space to select several things; hold Space and drag to move around.</p>
+      </div>
+    </div>
+
+    <header id="topbar">
+      <div class="group" id="tb-left">
+        <button class="btn icon-only" id="b-menu" type="button" aria-label="Your boards" aria-haspopup="menu" aria-expanded="false" title="Your boards"><span data-ic="boards"></span></button>
+        <input id="title" aria-label="Board title" maxlength="120" autocomplete="off" spellcheck="false">
+        <span class="chip" id="ex-chip" hidden>Example</span>
+        <span id="status" aria-live="polite"></span>
+      </div>
+      <div class="group" id="tb-right">
+        <button class="btn icon-only hide-sm" id="b-undo" type="button" aria-label="Undo" title="Undo"><span data-ic="undo"></span></button>
+        <button class="btn icon-only hide-sm" id="b-redo" type="button" aria-label="Redo" title="Redo"><span data-ic="redo"></span></button>
+        <button class="btn" id="b-tidy" type="button" title="Arrange everything into neat columns"><span data-ic="tidy"></span><span class="lbl lbl-md">Tidy</span></button>
+        <button class="btn" id="b-ai" type="button" aria-pressed="false"><span data-ic="spark"></span><span class="lbl">Assistant</span></button>
+        <button class="btn" id="b-notes" type="button" hidden title="Add notes or emails about this meeting to memory"><span data-ic="note"></span><span class="lbl lbl-md">Add notes</span></button>
+        <button class="btn" id="b-float" type="button" aria-pressed="false" title="A small window that floats over your meeting (F)"><span data-ic="popout"></span><span class="lbl lbl-md">Float</span></button>
+        <button class="btn primary" id="b-glance" type="button" title="Read-only view for during the meeting"><span data-ic="glance"></span><span class="lbl">Glance</span></button>
+      </div>
+    </header>
+
+    <div id="menu" class="menu" hidden role="menu"></div>
+
+    <nav id="dock" aria-label="Add to board">
+      <div class="group">
+        <button class="btn tool" type="button" data-add="note" title="Sticky note"><span data-ic="note"></span><span class="lbl">Note</span></button>
+        <button class="btn tool" type="button" data-add="text" title="Heading or text"><span data-ic="text"></span><span class="lbl">Text</span></button>
+        <button class="btn tool" type="button" data-add="card" title="Card with a title and points"><span data-ic="card"></span><span class="lbl">Card</span></button>
+        <button class="btn tool" type="button" data-add="person" title="Someone in the meeting"><span data-ic="person"></span><span class="lbl">Person</span></button>
+        <button class="btn tool" type="button" data-add="list" title="Checklist"><span data-ic="list"></span><span class="lbl">Checklist</span></button>
+        <button class="btn tool" type="button" data-add="shape" title="Shape"><span data-ic="shape"></span><span class="lbl">Shape</span></button>
+        <button class="btn tool" type="button" data-add="arrow" title="Arrow. Or drag from the dot beside anything you’ve selected"><span data-ic="arrow"></span><span class="lbl">Arrow</span></button>
+        <button class="btn tool" type="button" id="b-image" title="Image. You can also paste or drop images onto the board"><span data-ic="image"></span><span class="lbl">Image</span></button>
+        <button class="btn tool" type="button" id="b-draw" aria-pressed="false" title="Draw with a pen, highlighter or eraser"><span data-ic="pen"></span><span class="lbl">Draw</span></button>
+        <button class="btn tool" type="button" data-add="chart" title="Chart"><span data-ic="chart"></span><span class="lbl">Chart</span></button>
+        <button class="btn tool" type="button" data-add="stat" title="Key number"><span data-ic="stat"></span><span class="lbl">Number</span></button>
+      </div>
+    </nav>
+
+    <div id="zoombar" class="group">
+      <button class="btn icon-only" id="z-out" type="button" aria-label="Zoom out"><span data-ic="minus"></span></button>
+      <button class="btn z-label" id="z-reset" type="button" title="Reset zoom to 100%">100%</button>
+      <button class="btn icon-only" id="z-in" type="button" aria-label="Zoom in"><span data-ic="plus"></span></button>
+      <button class="btn icon-only" id="z-fit" type="button" aria-label="Fit board to screen" title="Fit board to screen"><span data-ic="fit"></span></button>
+    </div>
+
+    <div id="seltools" class="group" hidden></div>
+    <div id="pop" class="pop" hidden></div>
+
+    <div id="glancebar" hidden>
+      <div class="g-row">
+        <button class="btn" id="g-done" type="button" title="Back to editing"><span data-ic="close"></span><span class="lbl">Done</span></button>
+        <div class="g-title" id="g-title"></div>
+        <button class="btn" id="g-float" type="button" aria-pressed="false" title="A small window that floats over your meeting (F)"><span data-ic="popout"></span><span class="lbl">Float</span></button>
+        <label class="g-search"><span data-ic="search"></span><input id="g-q" type="search" placeholder="Find on board" aria-label="Find on board" autocomplete="off"></label>
+        <div class="g-timer">
+          <button class="btn" id="g-time" type="button" title="Start or pause the meeting timer"><span data-ic="clock"></span><span id="g-time-l">Start</span></button>
+          <button class="btn g-len" id="g-len" type="button" title="Meeting length">of 45 min</button>
+          <button class="btn icon-only" id="g-reset" type="button" aria-label="Reset timer" title="Reset timer" hidden><span data-ic="undo"></span></button>
+        </div>
+      </div>
+      <div class="g-prog"><div id="g-prog"></div></div>
+      <div class="g-chips" id="g-chips" aria-label="Jump to"></div>
+    </div>
+    <form id="gnote" hidden autocomplete="off"><span data-ic="note"></span><input id="gnote-in" placeholder="Jot a note. Enter adds it to the board." aria-label="Meeting note"></form>
+
+    <div id="toast" hidden role="status"></div>
+  </main>
+
+  <aside id="assistant" hidden aria-label="Assistant">
+    <div class="as-head">
+      <div class="as-title"><span data-ic="spark"></span>Assistant</div>
+      <label class="as-deep" title="Slower, more careful answers"><input type="checkbox" id="as-deep"><span>Think harder</span></label>
+      <button class="btn icon-only" id="as-close" type="button" aria-label="Close assistant"><span data-ic="close"></span></button>
+    </div>
+    <div class="as-msgs" id="as-msgs"></div>
+    <form class="as-compose" id="as-form">
+      <div class="as-ctx" id="as-ctx" hidden></div>
+      <textarea id="as-in" rows="2" placeholder="Ask about this board, or tell it what to add"></textarea>
+      <div class="as-row"><span class="as-hint">Enter to send, Shift+Enter for a new line</span><button class="btn primary" id="as-send" type="submit"><span data-ic="send"></span><span class="lbl">Send</span></button></div>
+    </form>
+  </aside>
+</div>
+
+<script>
+/*ENGINE*/
+</script>
+<script>
+/*APP*/
+</script>
+</body></html>
