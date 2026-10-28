@@ -1,0 +1,9 @@
+node_modules
+dist
+reports
+data
+.git
+.claude
+deploy/local.env
+*.log
+.DS_Store

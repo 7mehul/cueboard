@@ -8,7 +8,7 @@ export type DocKind = 'invite' | 'email' | 'notes' | 'transcript' | 'profile' | 
 export const DOC_KINDS: DocKind[] = ['invite', 'email', 'notes', 'transcript', 'profile', 'deck', 'other'];
 
 // Something the user pasted or a connector supplied, with the date it's from.
-export interface Doc { id: string; kind: DocKind; text: string; date: string; title?: string }
+export interface Doc { id: string; kind: DocKind; text: string; date: string; title?: string; url?: string }
 
 export interface MeetingRecord {
   id: string;

@@ -11,6 +11,9 @@ import type { LLM } from '../src/intel/llm.ts';
 import { addMeeting, commit, readDoc } from '../src/memory/extract.ts';
 import type { Choice, MeetingForm, Proposal } from '../src/memory/extract.ts';
 import { packetFor, upcoming } from '../src/memory/packet.ts';
+import { PASTE_BREAK, splitPaste } from '../src/memory/split.ts';
+import { todayModel } from '../src/memory/today.ts';
+import { granolaToDoc } from '../src/memory/granola.ts';
 import { emptyMemory } from '../src/memory/types.ts';
 import type { Doc, Memory } from '../src/memory/types.ts';
 import { generate } from '../synth/generate.ts';
@@ -60,7 +63,7 @@ export async function boardForSmart(sampleId: string, sample: unknown) {
 // Which model the page can use: Claude inside a published artifact, or the local server's.
 export function modelFor(sample: unknown): LLM { return artifactModel(sample as Parameters<typeof artifactModel>[0]); }
 export function localModel(): LLM { return serverModel('/api/llm', 'local'); }
-export { serverStatus, upcoming };
+export { serverStatus, upcoming, splitPaste, PASTE_BREAK, todayModel, granolaToDoc };
 
 // Memory as saved by the page: whatever is missing is filled in, so an older save still loads.
 export function reviveMemory(raw: unknown, userId: string): Memory {
@@ -95,8 +98,10 @@ export async function readDocuments(memory: Memory, docs: Doc[], llm: LLM, onEac
   return out;
 }
 
-// Saving what the user kept: the same documents, in the same order, with their choices.
-export function saveDocuments(memory: Memory, read: { doc: Doc; proposal?: Proposal }[], choices: Choice[], meeting?: MeetingForm | null) {
+// Saving what the user kept: the same documents, in the same order, with their choices. The
+// meeting the user set up comes from `fromDoc`'s invite (or their form); any other invites in the
+// same paste are saved as meetings too, with the people the user kept.
+export function saveDocuments(memory: Memory, read: { doc: Doc; proposal?: Proposal; personIds: Record<string, string> }[], choices: Choice[], meeting?: MeetingForm | null, fromDoc?: string) {
   let m = memory, added = 0;
   read.forEach((r, i) => {
     if (!r.proposal) return;
@@ -105,9 +110,16 @@ export function saveDocuments(memory: Memory, read: { doc: Doc; proposal?: Propo
   });
   let meetingId: string | undefined;
   if (meeting) {
-    const from = read.find(r => r.proposal?.meeting);
+    const from = read.find(r => r.doc.id === fromDoc) ?? read.find(r => r.proposal?.meeting);
     const a = addMeeting(m, meeting, from ? `s-${from.doc.id}` : undefined);
     m = a.memory; meetingId = a.meetingId; added++;
+  }
+  for (const r of read) {
+    const pm = r.proposal?.meeting;
+    if (!pm || r.doc.id === fromDoc || !m.sources.some(s => s.id === `s-${r.doc.id}`)) continue;
+    const ids = pm.attendeeRefs.map(ref => { const p = r.proposal!.people.find(x => x.ref === ref); return p ? p.knownId ?? r.personIds[ref] : undefined; })
+      .filter((x): x is string => !!x && m.people.some(p => p.id === x));
+    m = addMeeting(m, { title: pm.title, startsAt: pm.startsAt, durationMin: pm.durationMin, attendeeIds: ids, ...(pm.goal ? { goal: pm.goal } : {}) }, `s-${r.doc.id}`).memory;
   }
   return { memory: m, added, ...(meetingId ? { meetingId } : {}) };
 }

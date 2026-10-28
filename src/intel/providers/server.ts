@@ -30,11 +30,11 @@ export function serverModel(url = '/api/llm', name = 'server'): LLM {
 }
 
 // Whether the server has a model to offer, and which.
-export async function serverStatus(url = '/api/llm'): Promise<{ available: boolean; model?: string }> {
+export async function serverStatus(url = '/api/llm'): Promise<{ available: boolean; chat?: boolean; model?: string }> {
   try {
     const res = await fetch(url, { headers: { 'x-cueboard': '1' } });
     if (!res.ok) return { available: false };
-    return await res.json() as { available: boolean; model?: string };
+    return await res.json() as { available: boolean; chat?: boolean; model?: string };
   } catch {
     return { available: false };
   }

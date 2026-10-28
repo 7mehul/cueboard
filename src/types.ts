@@ -17,6 +17,7 @@ export interface Source {
   ref: string;
   seenAt: string;
   ownerId?: string; // private sources (email, notes) belong to one user
+  url?: string;     // where to open it, when it has an address (a Granola note)
 }
 
 export interface Subject { kind: 'person' | 'company' | 'self'; id: string }

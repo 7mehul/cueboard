@@ -312,10 +312,11 @@ function normalizeBoard(raw) {
     links: (Array.isArray(raw.links) ? raw.links : []).slice(0, 400).map(l => normalizeLink(l, ids)).filter(Boolean),
     view: v && isFinite(num(v.x)) && isFinite(num(v.y)) && isFinite(num(v.z)) ? { x: num(v.x), y: num(v.y), z: clamp(num(v.z), 0.15, 3) } : null,
     ...(typeof raw.meetingId === 'string' && /^[\w-]{1,80}$/.test(raw.meetingId) ? { meetingId: raw.meetingId } : {}),
+    ...(raw.settle === true ? { settle: true } : {}),
   };
 }
 function serialize(b) {
-  return { title: b.title, updatedAt: b.updatedAt, example: !!b.example, view: b.view || null, elements: b.elements, links: b.links || [], ...(b.meetingId ? { meetingId: b.meetingId } : {}) };
+  return { title: b.title, updatedAt: b.updatedAt, example: !!b.example, view: b.view || null, elements: b.elements, links: b.links || [], ...(b.meetingId ? { meetingId: b.meetingId } : {}), ...(b.settle ? { settle: true } : {}) };
 }
 
 // A board the engine drew, as a starting arrangement the user then owns.
@@ -400,7 +401,8 @@ function zoomAt(sx, sy, f) {
 }
 function insets() {
   if (S.glance) return { t: gbar.offsetHeight + 12, b: gnote.offsetHeight + 32, l: 24, r: 24 };
-  return { t: 76, b: 100, l: 28, r: 28 };
+  // The assistant floats over the board, so a fitted board stays clear of it.
+  return { t: 76, b: 100, l: 28, r: S.asOpen && !narrow() ? 28 + 396 : 28 };
 }
 function sizeOf(e) { const n = nodes.get(e.id); return { w: n ? n.offsetWidth : e.w, h: n ? n.offsetHeight : e.h }; }
 const RAD = Math.PI / 180;
@@ -1677,6 +1679,7 @@ function switchBoard(id) {
   closePop(); closeMenu();
   renderAll(); updateChrome(); updateUndo(); renderChat(); updateCtx();
   const b = board();
+  if (S.booted && b.meetingId) track('board_opened');
   if (b.settle) {
     const run = () => { if (S.boardId !== b.id || !b.settle) return; delete b.settle; settle(); if (b.autoFit && !S.viewTouched) fitAll(false); if (!b.example) scheduleSave(b.id); };
     requestAnimationFrame(run);
@@ -1768,6 +1771,8 @@ function openMenu(mode) {
     });
     menu.append(h('hr'));
     menu.append(h('button', { class: 'menu-item', type: 'button', role: 'menuitem', onclick: () => { closeMenu(); newBoard(); } }, ic('plus'), h('span', { class: 'mi-main' }, h('span', { class: 'mi-title', text: 'New blank board' }))));
+    if (Engine && Engine.todayModel) menu.append(h('button', { class: 'menu-item', type: 'button', role: 'menuitem', onclick: () => openToday() }, ic('calendar'), h('span', { class: 'mi-main' }, h('span', { class: 'mi-title', text: 'Today' }), h('span', { class: 'mi-sub', text: 'Your meetings and what’s ready' }))));
+    if (Engine && Engine.granolaToDoc && granolaOffered()) menu.append(h('button', { class: 'menu-item', type: 'button', role: 'menuitem', onclick: () => openGranolaImport() }, ic('note'), h('span', { class: 'mi-main' }, h('span', { class: 'mi-title', text: 'Import from Granola…' }), h('span', { class: 'mi-sub', text: 'Your past meeting notes, into memory' }))));
     if (Engine && Engine.readDocuments) menu.append(h('button', { class: 'menu-item', type: 'button', role: 'menuitem', onclick: () => openSheet('prep') }, ic('note'), h('span', { class: 'mi-main' }, h('span', { class: 'mi-title', text: 'Prep from emails and notes…' }), h('span', { class: 'mi-sub', text: 'Paste the invite, emails, your notes' }))));
     const ahead = Mem.data && Engine && Engine.upcoming ? Engine.upcoming(Mem.data, new Date().toISOString()).filter(m => !Object.values(S.boards).some(b => b.meetingId === m.id)).slice(0, 5) : [];
     if (ahead.length) {
@@ -1975,6 +1980,7 @@ async function loadMemory() {
   return Mem.data;
 }
 async function saveMemory() {
+  queueToday();
   if (Store.mode === 'db' && Store.col) { try { await Store.col.doc('memory').set(JSON.parse(JSON.stringify(Mem.data))); return true; } catch (_) { } }
   try { localStorage.setItem(MEM_KEY, JSON.stringify(Mem.data)); return true; }
   catch (_) { toast('Memory is full in this browser, so this wasn’t saved'); return false; }
@@ -1983,7 +1989,7 @@ async function saveMemory() {
 async function memoryModel() {
   if (Mem.llm !== undefined) return Mem.llm;
   const sample = AI.sample || (await AI.ready);
-  if (sample) return (Mem.llm = Engine.modelFor(sample));
+  if (sample) return (Mem.llm = sample.local ? Engine.localModel() : Engine.modelFor(sample));
   const st = await Engine.serverStatus();
   return (Mem.llm = st.available ? Engine.localModel() : null);
 }
@@ -1994,16 +2000,49 @@ sheet.addEventListener('keydown', e => { if (e.key === 'Escape' && !R.busy) { e.
 sheet.addEventListener('pointerdown', e => { if (e.target === sheet && !R.busy) closeSheet(); });
 let R = {};
 
-async function openSheet(mode) {
+// opts.meetingId: notes for that meeting. opts.text: what was pasted elsewhere (Today), read
+// straight away when opts.go is set, since its pieces were already shown there.
+async function openSheet(mode, opts) {
   if (!Engine || !Engine.readDocuments) { toast('Reading documents isn’t available in this build'); return; }
+  opts = opts || {};
   exitPen(); closeMenu(); blurField();
   await (Mem.ready || (Mem.ready = loadMemory()));
   Mem.llm = undefined;
   const b = board();
-  const m = mode === 'notes' && b.meetingId ? Mem.data.meetings.find(x => x.id === b.meetingId) : null;
-  R = { mode, meeting: m, busy: false, docs: [{ kind: mode === 'notes' ? 'notes' : 'invite', date: m ? m.startsAt.slice(0, 10) : today(), text: '' }] };
+  const mid = opts.meetingId || (mode === 'notes' && b && b.meetingId);
+  const m = mid ? Mem.data.meetings.find(x => x.id === mid) : null;
+  R = { mode, meeting: m, busy: false, text: opts.text || '', fix: {} };
   sheet.hidden = false;
-  if (!Mem.data.user) sheetYou(); else sheetPaste();
+  if (!Mem.data.user) { sheetYou(); return; }
+  if (opts.go && R.text.trim()) {
+    const llm = await memoryModel();
+    if (llm) { R.docs = pieces(); sheetReading(llm); return; }
+  }
+  sheetPaste();
+}
+
+// What the pasted text splits into, with any kind or date the person changed by hand. After a
+// call, undated notes are about that call.
+const fixKey = c => c.text.slice(0, 80);
+function pieces() {
+  const day = today();
+  return Engine.splitPaste(R.text, day).map(c => {
+    const d = Object.assign({}, c, R.fix[fixKey(c)] || {});
+    if (R.mode === 'notes' && R.meeting && d.date === day && (d.kind === 'notes' || d.kind === 'transcript') && !(R.fix[fixKey(c)] || {}).date) d.date = R.meeting.startsAt.slice(0, 10);
+    return d;
+  });
+}
+// Pasting onto something already there keeps the two apart, so one box takes several documents.
+function pasteApart(ta, after) {
+  ta.addEventListener('paste', e => {
+    const txt = e.clipboardData && e.clipboardData.getData('text/plain');
+    const before = ta.value.slice(0, ta.selectionStart), rest = ta.value.slice(ta.selectionEnd);
+    if (!txt || !before.trim() || rest.trim()) return;
+    e.preventDefault();
+    ta.value = before.replace(/\s+$/, '') + Engine.PASTE_BREAK + txt.trim();
+    ta.selectionStart = ta.selectionEnd = ta.value.length;
+    after();
+  });
 }
 function closeSheet() { sheet.hidden = true; sheet.textContent = ''; R = {}; }
 function sheetFrame(title, sub, body, foot) {
@@ -2029,7 +2068,7 @@ function sheetYou() {
     Mem.data.user = Object.assign({ role: val('you-role'), company: val('you-company') },
       val('you-name') ? { name: val('you-name') } : {}, val('you-email') ? { email: val('you-email') } : {},
       goals.value.trim() ? { objectives: goals.value.split('\n').map(s => s.trim()).filter(Boolean).slice(0, 6) } : {});
-    saveMemory(); sheetPaste();
+    saveMemory(); (R.afterYou || sheetPaste)();
   };
   sheetFrame('About you', 'Asked once. It decides whose numbers are whose and what a good outcome looks like for you.',
     h('div', { class: 'sh-grid' },
@@ -2041,22 +2080,26 @@ function sheetYou() {
 }
 
 function sheetPaste(note) {
-  const list = h('div', { class: 'sh-docs' });
+  const ta = h('textarea', { class: 'in sh-ta sh-one', rows: 11, 'aria-label': 'Everything about the meeting',
+    placeholder: R.mode === 'notes' ? 'Paste your notes, the notetaker’s summary, or the follow-up email' : 'Paste the invite, the email thread, your notes. Paste each one in turn; they’re kept apart.' });
+  ta.value = R.text;
+  const found = h('div', { class: 'sh-found' });
   const draw = () => {
-    list.textContent = '';
-    R.docs.forEach((d, i) => {
-      const kind = h('select', { class: 'in sh-kind', 'aria-label': 'What this is' }, Object.keys(DOC_LABEL).map(k => h('option', { value: k, selected: d.kind === k }, DOC_LABEL[k])));
-      const date = h('input', { class: 'in sh-date', type: 'date', value: d.date, 'aria-label': 'Date' });
-      const ta = h('textarea', { class: 'in sh-ta', rows: 7, placeholder: DOC_HINT[d.kind], 'aria-label': DOC_LABEL[d.kind] });
-      ta.value = d.text;
-      kind.addEventListener('change', () => { d.kind = kind.value; ta.placeholder = DOC_HINT[d.kind]; ta.setAttribute('aria-label', DOC_LABEL[d.kind]); });
-      date.addEventListener('change', () => { d.date = date.value || today(); });
-      ta.addEventListener('input', () => { d.text = ta.value; });
-      list.append(h('div', { class: 'sh-doc' },
-        h('div', { class: 'sh-doc-row' }, kind, date, R.docs.length > 1 ? h('button', { class: 'btn icon-only', type: 'button', 'aria-label': 'Remove', onclick: () => { R.docs.splice(i, 1); draw(); } }, ic('trash')) : null),
-        ta));
-    });
+    const ps = R.text.trim() ? pieces() : [];
+    found.textContent = '';
+    if (!ps.length) return;
+    found.append(h('div', { class: 'sh-found-h', text: ps.length === 1 ? 'Found one document' : `Found ${ps.length} documents` }),
+      ...ps.map(c => {
+        const kind = h('select', { class: 'in sh-kind', 'aria-label': `What this is: ${c.title}` }, Object.keys(DOC_LABEL).map(k => h('option', { value: k, selected: c.kind === k }, DOC_LABEL[k])));
+        const date = h('input', { class: 'in sh-date', type: 'date', value: c.date, 'aria-label': `Date of ${c.title}` });
+        kind.addEventListener('change', () => { R.fix[fixKey(c)] = Object.assign({}, R.fix[fixKey(c)], { kind: kind.value }); });
+        date.addEventListener('change', () => { R.fix[fixKey(c)] = Object.assign({}, R.fix[fixKey(c)], { date: date.value || today() }); });
+        return h('div', { class: 'sh-piece' }, kind, date, h('span', { class: 'sh-piece-t', text: c.title }));
+      }));
   };
+  let t = 0;
+  ta.addEventListener('input', () => { R.text = ta.value; clearTimeout(t); t = setTimeout(draw, 200); });
+  pasteApart(ta, () => { R.text = ta.value; draw(); });
   draw();
   const status = h('p', { class: 'sh-model' }, 'Checking for a model…');
   const err = h('p', { class: 'sh-err', hidden: !note, text: note || '' });
@@ -2065,7 +2108,7 @@ function sheetPaste(note) {
     status.hidden = !!llm;
   });
   const go = async () => {
-    const docs = R.docs.filter(d => d.text.trim());
+    const docs = R.text.trim() ? pieces() : [];
     if (!docs.length) { err.textContent = 'Paste something first.'; err.hidden = false; return; }
     const llm = await memoryModel();
     if (!llm) { err.textContent = 'There’s no model to read with yet (see above).'; err.hidden = false; return; }
@@ -2074,21 +2117,27 @@ function sheetPaste(note) {
   };
   const u = Mem.data.user;
   sheetFrame(R.mode === 'notes' ? 'What happened?' : 'Prep from what you have',
-    [R.mode === 'notes' && R.meeting ? `After “${R.meeting.title}”. ` : '', 'Each one is read on its own, every item is checked against your text, and nothing is saved until you’ve looked. ',
+    [R.mode === 'notes' && R.meeting ? `After “${R.meeting.title}”. ` : '', 'Everything is checked against your text, and nothing is saved until you’ve looked. ',
       h('button', { class: 'linkish', type: 'button', onclick: sheetYou }, `You: ${u.role} at ${u.company}`)],
-    [list, h('button', { class: 'btn sh-add', type: 'button', onclick: () => { R.docs.push({ kind: R.mode === 'notes' ? 'email' : 'email', date: today(), text: '' }); draw(); const t = list.querySelectorAll('textarea'); t[t.length - 1].focus(); } }, ic('plus'), 'Add another'), status, err],
-    [h('button', { class: 'btn', type: 'button', onclick: closeSheet }, 'Cancel'), h('button', { class: 'btn primary', type: 'button', onclick: go }, ic('spark'), 'Read it')]);
-  setTimeout(() => { const t = list.querySelector('textarea'); if (t) t.focus(); }, 30);
+    [ta, found, status, err],
+    [h('button', { class: 'btn', type: 'button', onclick: closeSheet }, 'Cancel'), h('button', { class: 'btn primary', type: 'button', onclick: go }, ic('spark'), 'Read them')]);
+  setTimeout(() => ta.focus(), 30);
 }
 
 async function sheetReading(llm) {
   R.busy = true;
   const line = h('p', { class: 'sh-progress' });
   sheetFrame('Reading…', 'Every item has to quote your text word for word, or it’s left out.', [line], null);
-  const docs = R.docs.map((d, i) => ({ id: rid('d'), kind: d.kind, text: d.text.trim(), date: d.date || today() }));
+  const docs = R.docs.map(d => Object.assign({ id: d.id || rid('d'), kind: d.kind, text: d.text.trim(), date: d.date || today() },
+    d.title && !/^(Invite|Email)\b/.test(d.title) ? { title: d.title } : {}, d.url ? { url: d.url } : {}));
   const read = await Engine.readDocuments(Mem.data, docs, llm, i => { line.textContent = `Reading ${i + 1} of ${docs.length}: ${DOC_LABEL[docs[i].kind].toLowerCase()}`; });
   R.busy = false;
-  if (!read.some(r => r.proposal)) { sheetPaste(`Couldn’t read that: ${read[0] && read[0].error ? read[0].error : 'no answer came back'}. Try again in a moment.`); return; }
+  if (!read.some(r => r.proposal)) {
+    const why = `Couldn’t read that: ${read[0] && read[0].error ? read[0].error : 'no answer came back'}. Try again in a moment.`;
+    if (R.back) sheetFrame('Couldn’t read those', null, [h('p', { class: 'sh-err', text: why })], [h('button', { class: 'btn', type: 'button', onclick: R.back }, 'Back')]);
+    else sheetPaste(why);
+    return;
+  }
   R.read = read;
   sheetReview();
 }
@@ -2131,7 +2180,10 @@ function sheetReview() {
   // Meeting
   let mf = null;
   if (R.mode === 'prep') {
-    const found = read.find(r => r.proposal && r.proposal.meeting);
+    // The meeting being prepped: the next one ahead among the invites pasted, else the latest.
+    const invites = read.filter(r => r.proposal && r.proposal.meeting).sort((a, b) => new Date(a.proposal.meeting.startsAt) - new Date(b.proposal.meeting.startsAt));
+    const found = invites.find(r => new Date(r.proposal.meeting.startsAt) > Date.now()) || invites[invites.length - 1];
+    R.fromDoc = found ? found.doc.id : undefined;
     const pm = found && found.proposal.meeting;
     const d = pm ? new Date(pm.startsAt) : new Date(Date.now() + 864e5);
     if (!pm) d.setHours(10, 0, 0, 0);
@@ -2187,9 +2239,10 @@ function sheetReview() {
         attendeeIds: mf.who.map(l => l.querySelector('input')).filter(c => c.checked && accepted.has(c.dataset.who)).map(c => c.dataset.who) },
         mf.goal.value.trim() ? { goal: mf.goal.value.trim() } : {});
     }
-    const s = Engine.saveDocuments(Mem.data, read, choices, meeting);
+    const s = Engine.saveDocuments(Mem.data, read, choices, meeting, R.fromDoc);
     Mem.data = s.memory;
     await saveMemory();
+    track('memory_saved', { kind: R.mode, n: s.added });
     closeSheet();
     if (s.meetingId) boardFromMemory(s.meetingId, s.added);
     else {
@@ -2200,28 +2253,279 @@ function sheetReview() {
   const total = read.reduce((n, r) => n + (r.proposal ? r.proposal.items.length : 0), 0);
   sheetFrame('Check what it found', `${total} ${total === 1 ? 'thing' : 'things'} from ${read.length} ${read.length === 1 ? 'document' : 'documents'}. Uncheck anything that’s wrong; the quote under each is where it came from.`,
     [...body, err],
-    [h('button', { class: 'btn', type: 'button', onclick: () => sheetPaste() }, 'Back'),
+    [h('button', { class: 'btn', type: 'button', onclick: () => (R.back ? R.back() : sheetPaste()) }, 'Back'),
       h('button', { class: 'btn primary', type: 'button', onclick: save }, R.mode === 'prep' ? 'Save and make the board' : 'Save to memory')]);
 }
 
-async function boardFromMemory(meetingId, added) {
+// opts.open false: make it and keep it for later (Today shows it as ready).
+async function boardFromMemory(meetingId, added, opts) {
+  const open = !opts || opts.open !== false;
   await (Mem.ready || (Mem.ready = loadMemory()));
   const llm = await memoryModel();
-  if (llm) toast('Reading the meeting…');
+  if (llm && open) toast('Reading the meeting…');
   let r = null;
   try { r = await Engine.boardForMemory(Mem.data, meetingId, new Date().toISOString(), llm); } catch (_) { r = null; }
-  if (!r) { toast('That meeting isn’t in memory'); return; }
-  const cur = board();
-  if (cur && !cur.example && !cur.elements.length) { delete S.boards[cur.id]; dirty.delete(cur.id); Store.remove(cur.id); }
+  if (!r) { toast('That meeting isn’t in memory'); return null; }
   const b = fromEngine(r.board, rid('b-'), { meetingId });
   S.boards[b.id] = b;
-  switchBoard(b.id);
   scheduleSave(b.id);
+  track('board_made', { kind: r.mode === 'model' ? 'model' : 'rules' });
+  if (!open) return b.id;
+  const cur = board();
+  if (cur && cur.id !== b.id && !cur.example && !cur.elements.length) { delete S.boards[cur.id]; dirty.delete(cur.id); Store.remove(cur.id); }
+  closeToday();
+  switchBoard(b.id);
   const saved = added ? `Saved ${added} things to memory. ` : '';
   toast(saved + (r.mode === 'model' ? `Read as: ${r.brief.step}. Hover anything to see why it’s there.`
     : r.stage === 'followup' ? 'What you know from last time is marked in green.' : 'Drafted from what you pasted. Move, edit or delete anything.'));
+  return b.id;
 }
 function updateNotesBtn() { const b = board(), btn = $('#b-notes'); if (btn) btn.hidden = !(b && b.meetingId); }
+
+/* ================= Granola import ================= */
+// Notes people already have in Granola come into memory the same way a paste does: each note is
+// read, every item checked against it, and nothing is saved until the person has looked. The
+// local server holds the Granola key; without that server (a published artifact) this is hidden.
+const GR = { status: null };
+const grHeaders = { headers: { 'x-cueboard': '1' } };
+const granolaOffered = () => !!(GR.status && GR.status.server && !GR.status.hosted);
+async function granolaStatus() {
+  if (GR.status) return GR.status;
+  try {
+    const r = await fetch('/api/granola', grHeaders);
+    GR.status = r.ok ? Object.assign({ server: true }, await r.json()) : { server: false, available: false };
+  } catch (_) { GR.status = { server: false, available: false }; }
+  queueToday();
+  return GR.status;
+}
+// The hosted test counts what people do (never what's in it), to see whether they come back.
+// Only Cueboard's own server listens; a local one ignores it.
+function track(ev, extra) {
+  if (!GR.status || !GR.status.server) return;
+  try { fetch('/api/event', { method: 'POST', headers: { 'content-type': 'application/json', 'x-cueboard': '1' }, body: JSON.stringify(Object.assign({ ev }, extra)), keepalive: true }).catch(() => { }); } catch (_) { }
+}
+const isoDay = t => { const d = new Date(t); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+
+async function openGranolaImport() {
+  if (!Engine || !Engine.granolaToDoc) return;
+  closeMenu(); blurField(); exitPen();
+  await (Mem.ready || (Mem.ready = loadMemory()));
+  Mem.llm = undefined;
+  R = { mode: 'import', busy: false, back: granolaPick };
+  sheet.hidden = false;
+  // Setup first if there's no key: no point asking about you before Granola can answer.
+  if (!Mem.data.user && (await granolaStatus()).available) { R.afterYou = granolaPick; sheetYou(); return; }
+  granolaPick();
+}
+
+async function granolaPick() {
+  const st = await granolaStatus();
+  if (!st.available) {
+    sheetFrame('Bring in your Granola notes', 'Cueboard reads your notes through Granola’s API, with a key that stays in your terminal.',
+      [h('ol', { class: 'gr-setup' },
+        h('li', {}, 'In Granola, open Settings → Connectors → API keys and create a key. It needs a Business plan.'),
+        h('li', {}, 'Stop Cueboard in your terminal and start it again with the key set:', h('code', { text: 'GRANOLA_API_KEY=grn_… node scripts/serve.ts' })),
+        h('li', {}, 'Reload this page and choose Import from Granola again.'))],
+      [h('button', { class: 'btn primary', type: 'button', onclick: closeSheet }, 'Close')]);
+    return;
+  }
+  R.busy = true;
+  sheetFrame('Bring in your Granola notes', null, [h('p', { class: 'sh-progress', text: 'Loading your notes from Granola…' })], null);
+  const notes = [];
+  let cursor = null, error = null;
+  try {
+    for (let page = 0; page < 4; page++) {
+      const r = await fetch(`/api/granola/notes?after=${isoDay(Date.now() - 60 * 864e5)}${cursor ? '&cursor=' + encodeURIComponent(cursor) : ''}`, grHeaders);
+      const b = await r.json().catch(() => null);
+      if (!r.ok || !b) { error = (b && b.error && b.error.message) || 'Granola didn’t answer.'; break; }
+      notes.push(...b.notes);
+      if (!b.hasMore || !b.cursor) break;
+      cursor = b.cursor;
+    }
+  } catch (_) { error = 'Couldn’t reach Cueboard’s server.'; }
+  R.busy = false;
+  if (error && !notes.length) { sheetFrame('Bring in your Granola notes', null, [h('p', { class: 'sh-err', text: error })], [h('button', { class: 'btn', type: 'button', onclick: closeSheet }, 'Close')]); return; }
+  notes.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  const have = new Set(Mem.data.docs.map(d => d.id));
+  const recent = Date.now() - 30 * 864e5;
+  let picked = 0;
+  const count = h('span');
+  const rows = notes.map(n => {
+    const inMemory = have.has('granola-' + n.id);
+    const on = !inMemory && new Date(n.created_at).getTime() > recent && picked < 8;
+    if (on) picked++;
+    const cb = h('input', { type: 'checkbox', checked: on, 'data-note': n.id });
+    cb.addEventListener('change', updateCount);
+    return h('label', { class: 'rv-row' }, cb, h('span', { class: 'rv-main' },
+      h('span', { class: 'rv-text', text: n.title || 'Untitled meeting' }),
+      h('span', { class: 'rv-meta', text: new Date(n.created_at).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) + (inMemory ? ' · already in memory' : '') })));
+  });
+  const readBtn = h('button', { class: 'btn primary', type: 'button', onclick: () => readGranola([...sheet.querySelectorAll('[data-note]')].filter(c => c.checked).map(c => c.dataset.note)) }, ic('spark'), count);
+  function updateCount() { const n = sheet.querySelectorAll('[data-note]:checked').length; count.textContent = n === 1 ? 'Read 1 note' : `Read ${n} notes`; readBtn.disabled = !n; }
+  sheetFrame('Bring in your Granola notes',
+    'Pick the meetings worth remembering, usually the ones with people outside your company. Each is read by the model, 10–20 seconds a note, and nothing is saved until you’ve checked it.',
+    notes.length ? [error ? h('p', { class: 'sh-err', text: error }) : null, h('div', { class: 'gr-list' }, rows)] : [h('p', { class: 'rv-note', text: 'No Granola notes from the last 60 days.' })],
+    [h('button', { class: 'btn', type: 'button', onclick: closeSheet }, 'Cancel'), readBtn]);
+  updateCount();
+}
+
+async function readGranola(ids) {
+  if (!ids.length) return;
+  const llm = await memoryModel();
+  if (!llm) { sheetFrame('Bring in your Granola notes', null, [h('p', { class: 'sh-err', text: 'Reading needs a model. Start Cueboard with ANTHROPIC_API_KEY set as well.' })], [h('button', { class: 'btn', type: 'button', onclick: closeSheet }, 'Close')]); return; }
+  R.busy = true;
+  const line = h('p', { class: 'sh-progress' });
+  sheetFrame('Fetching from Granola…', null, [line], null);
+  const docs = [], failed = [];
+  for (const [i, id] of ids.entries()) {
+    line.textContent = `Fetching ${i + 1} of ${ids.length}`;
+    try {
+      const r = await fetch('/api/granola/notes/' + id, grHeaders);
+      const note = await r.json().catch(() => null);
+      if (!r.ok || !note) { failed.push((note && note.error && note.error.message) || id); continue; }
+      // Your own Granola account says who "me" is, if About you didn't.
+      if (note.owner && Mem.data.user && !Mem.data.user.email) { Mem.data.user.email = note.owner.email; if (!Mem.data.user.name && note.owner.name) Mem.data.user.name = note.owner.name; }
+      docs.push(Engine.granolaToDoc(note));
+    } catch (_) { failed.push(id); }
+  }
+  R.busy = false;
+  if (!docs.length) { sheetFrame('Bring in your Granola notes', null, [h('p', { class: 'sh-err', text: `Couldn’t fetch those notes: ${failed.join('; ')}` })], [h('button', { class: 'btn', type: 'button', onclick: granolaPick }, 'Back')]); return; }
+  if (failed.length) toast(`${failed.length} ${failed.length === 1 ? 'note' : 'notes'} couldn’t be fetched and were skipped.`);
+  R.docs = docs;
+  sheetReading(llm);
+}
+
+/* ================= today ================= */
+// The front page when meetings are coming up: each one with whether its board is ready, what
+// changed since you last spoke and what's owed, and one box to paste a new meeting into.
+const todayEl = h('section', { id: 'today', hidden: true, 'aria-label': 'Today' });
+app.append(todayEl);
+const TD = { open: false, busy: new Set(), draft: '', t: 0, iv: 0 };
+const NUMBERS = ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine'];
+const STATUS_CHIP = {
+  ready: ['Board ready', 'ok'], not_prepped: ['Not prepped yet', 'plain'], needs_notes: ['Needs your notes', 'warn'],
+  add_notes: ['How did it go?', 'warn'], reading: ['Reading the meeting', 'busy'],
+};
+const madeFor = () => Object.values(S.boards).filter(b => b.meetingId).map(b => b.meetingId);
+const boardFor = id => Object.values(S.boards).filter(b => b.meetingId === id).sort((a, b) => b.updatedAt - a.updatedAt)[0];
+const hm = d => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+function openToday() {
+  if (!Engine || !Engine.todayModel) return;
+  closeMenu(); blurField(); exitPen();
+  if (S.glance) exitGlance();
+  TD.open = true; todayEl.hidden = false; app.classList.add('today-open');
+  renderToday();
+  track('today_opened');
+  clearInterval(TD.iv); TD.iv = setInterval(renderToday, 60000);
+}
+function closeToday() {
+  if (!TD.open) return;
+  TD.open = false; todayEl.hidden = true; app.classList.remove('today-open');
+  clearInterval(TD.iv);
+}
+function queueToday() { if (!TD.open || TD.t) return; TD.t = setTimeout(() => { TD.t = 0; renderToday(); }, 60); }
+todayEl.addEventListener('keydown', e => { if (e.key === 'Escape' && sheet.hidden) { e.preventDefault(); closeToday(); } });
+
+async function makeFromToday(id) {
+  TD.busy.add(id); renderToday();
+  const bid = await boardFromMemory(id, 0, { open: false });
+  TD.busy.delete(id); renderToday();
+  if (bid) toast('Board ready', { label: 'Open', fn: () => openFromToday(id) });
+}
+function openFromToday(id, float) {
+  const b = boardFor(id); if (!b) return;
+  closeToday(); switchBoard(b.id);
+  if (float) toggleFloat();
+}
+
+function renderToday() {
+  if (!TD.open) return;
+  const now = new Date();
+  const model = Mem.data ? Engine.todayModel(Mem.data, now.toISOString(), madeFor()) : { sections: [], owed: [], upcoming: 0 };
+  const todays = (model.sections.find(x => x.key === 'today') || { meetings: [] }).meetings.length;
+  const top = h('header', { class: 'td-top' },
+    h('div', { class: 'group td-brand' }, h('span', { class: 'td-badge', 'aria-hidden': 'true', text: 'C' }), h('b', { text: 'Today' }),
+      h('span', { class: 'td-date', text: now.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' }) })),
+    h('div', { class: 'group' },
+      h('button', { class: 'btn', type: 'button', onclick: closeToday }, ic('boards'), h('span', { class: 'lbl', text: 'Your boards' })),
+      h('button', { class: 'btn primary', type: 'button', onclick: () => { const ta = $('#td-paste', todayEl); if (ta) ta.focus(); } }, ic('note'), h('span', { class: 'lbl', text: 'Paste for a meeting' }))));
+
+  const list = h('div', { class: 'td-list' },
+    h('h1', { class: 'td-h1', text: todays ? `${NUMBERS[todays] || todays} ${todays === 1 ? 'meeting' : 'meetings'} today` : 'Nothing on today' }));
+  if (!model.sections.length) {
+    list.append(h('div', { class: 'td-empty' },
+      h('p', { text: 'No meetings in memory yet. Paste an invite, and anything else you have about it, and the board drafts itself.' })));
+  }
+  for (const sec of model.sections) {
+    if (sec.key !== 'today') list.append(h('h2', { class: 'td-sec', text: sec.label }));
+    for (const m of sec.meetings) list.append(meetingCard(m, sec.key, now));
+  }
+
+  const ta = h('textarea', { id: 'td-paste', class: 'in td-ta', rows: 7, placeholder: 'Paste or drop anything about the meeting' });
+  ta.value = TD.draft;
+  const chips = h('div', { class: 'td-chips' });
+  const drawChips = () => {
+    chips.textContent = '';
+    const ps = TD.draft.trim() ? Engine.splitPaste(TD.draft, today()) : [];
+    for (const c of ps) chips.append(h('span', { class: 'td-chip k-' + c.kind, title: c.title, text: DOC_LABEL[c.kind] }));
+  };
+  let tt = 0;
+  ta.addEventListener('input', () => { TD.draft = ta.value; clearTimeout(tt); tt = setTimeout(drawChips, 200); });
+  pasteApart(ta, () => { TD.draft = ta.value; drawChips(); });
+  drawChips();
+  const readBtn = h('button', { class: 'btn primary td-read', type: 'button', onclick: () => {
+    if (!TD.draft.trim()) { ta.focus(); return; }
+    const text = TD.draft; TD.draft = '';
+    openSheet('prep', { text, go: true });
+  } }, ic('spark'), 'Read them');
+  const paste = h('div', { class: 'td-paste' },
+    h('h2', { text: 'Paste for a meeting' }),
+    h('label', { for: 'td-paste', text: 'The invite, the email thread, your notes: paste them one after another. Cueboard sorts out which is which.' }),
+    ta, chips, readBtn);
+
+  const owed = h('div', { class: 'td-owed' }, h('h2', { text: 'Owed this week' }),
+    model.owed.length ? h('ul', {}, model.owed.map(o => h('li', {},
+      h('span', { class: 'td-tag ' + (o.overdue ? 'bad' : o.theirs ? 'ok' : 'plain'), text: o.overdue ? 'Overdue' : o.theirs ? 'Theirs' : o.due ? new Date(o.due + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'short' }) : 'Open' }),
+      h('span', { text: o.text }))))
+      : h('p', { class: 'td-muted', text: 'Nothing owed either way.' }));
+
+  const gr = granolaOffered() ? h('div', { class: 'td-owed' }, h('h2', { text: 'Notes you already have' }),
+    h('p', { class: 'td-muted', text: 'Bring in past meetings from Granola, so follow-ups know where you left off.' }),
+    h('button', { class: 'btn td-gr', type: 'button', onclick: openGranolaImport }, ic('note'), 'Import from Granola')) : null;
+  todayEl.replaceChildren(top, h('div', { class: 'td-main' }, list, h('aside', { class: 'td-side' }, paste, gr, owed)));
+}
+
+function meetingCard(m, key, now) {
+  const start = new Date(m.startsAt), end = new Date(start.getTime() + m.durationMin * 60000);
+  const when = (key === 'today' ? '' : start.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) + ' · ') + `${hm(start)} – ${hm(end)}`;
+  const status = TD.busy.has(m.id) ? 'reading' : m.status;
+  const [chip, tone] = STATUS_CHIP[status];
+  const info = [
+    m.people.length ? h('div', {}, h('span', { class: 'td-k', text: 'With ' }), m.people.join(', ')) : null,
+    m.goal ? h('div', {}, h('span', { class: 'td-k', text: 'Goal ' }), m.goal) : null,
+    m.since ? h('div', {}, h('span', { class: 'td-k', text: 'Since last time ' }), m.since) : null,
+    ...m.owed.map(o => h('div', { class: o.overdue ? 'td-bad' : '' }, o.text)),
+  ].filter(Boolean);
+  const act = [];
+  const has = !!boardFor(m.id);
+  if (status === 'reading') act.push(h('div', { class: 'td-progress', role: 'progressbar', 'aria-label': 'Reading the meeting' }, h('i')));
+  else if (status === 'needs_notes' || status === 'add_notes') {
+    act.push(h('button', { class: 'btn primary', type: 'button', onclick: () => openSheet('notes', { meetingId: m.notesFor || m.id }) }, status === 'add_notes' ? 'Add what happened' : 'Add last call’s notes'));
+    if (status === 'needs_notes') act.push(has ? h('button', { class: 'btn', type: 'button', onclick: () => openFromToday(m.id) }, 'Open board anyway') : h('button', { class: 'btn', type: 'button', onclick: () => makeFromToday(m.id) }, 'Make the board anyway'));
+  } else if (status === 'ready') {
+    act.push(h('button', { class: 'btn primary', type: 'button', onclick: () => openFromToday(m.id) }, 'Open board'),
+      h('button', { class: 'btn', type: 'button', onclick: () => openFromToday(m.id, true) }, ic('popout'), 'Float beside the call'));
+  } else act.push(h('button', { class: 'btn primary', type: 'button', onclick: () => makeFromToday(m.id) }, ic('spark'), 'Make the board'));
+  const note = status === 'needs_notes' ? h('p', { class: 'td-muted', text: 'Notes from your last call with them aren’t in yet, so the board won’t know where you left off.' }) : null;
+  return h('article', { class: 'td-card' },
+    h('div', { class: 'td-meta' }, h('span', { class: 'td-time', text: when }), h('span', { class: 'td-tag ' + tone, text: chip }),
+      h('span', { class: 'td-muted', text: m.stage === 'followup' ? `Follow-up · meeting ${m.meetingNo}` : 'First meeting' })),
+    h('h3', { class: 'td-title', text: m.title }),
+    info.length ? h('div', { class: 'td-info' }, info) : null,
+    note,
+    h('div', { class: 'td-actions' }, act));
+}
 
 /* ================= float: the in-call window ================= */
 // During the call the board floats in a small window beside the meeting. Chrome and Edge keep it
@@ -2261,6 +2565,7 @@ async function toggleFloat() {
   w.addEventListener('pagehide', () => { if (FL.win === w) Object.assign(FL, { win: null, doc: null, ui: null, dock: null }); updateFloatBtn(); });
   w.addEventListener('resize', () => { if (floatOpen() && !FL.strip && Math.abs(w.innerWidth - FL.w) > 8) queueFloat(); });
   updateFloatBtn();
+  track('float_opened', { kind: dock ? 'dock' : pip ? 'pip' : 'popup' });
   if (dock) toast('This browser won’t open a floating window, so it’s docked here. In Chrome or Edge it floats over your meeting.');
   else if (!pip) toast('In this browser the window won’t stay on top. In Chrome or Edge it floats over your meeting.');
 }
@@ -2506,7 +2811,41 @@ function floatKey(ev) {
 
 /* ================= assistant ================= */
 const AI = { sample: null, ready: null, busy: false, ctl: null, deep: false, off: false };
-AI.ready = useCap('sample').then(s => { AI.sample = s; AI.off = !s; if (!s && S.asAuto && S.asOpen && !S.glance) setAssistant(false, true); renderChat(); updateEmpty(); updateSelTools(); return s; });
+// Run locally, the page uses the model of the server it came from (scripts/serve.ts), through a
+// stand-in with the same shape as Claude's in-page sampling, so the assistant works the same way.
+function localSample() {
+  const tier = t => (t === 'quick' ? 'low' : t === 'complex' ? 'high' : 'medium');
+  const call = async (input, opts) => {
+    opts = opts || {};
+    const messages = typeof input === 'string' ? [{ role: 'user', content: input }] : input;
+    let res;
+    try {
+      res = await fetch('/api/chat', { method: 'POST', headers: { 'content-type': 'application/json', 'x-cueboard': '1' }, body: JSON.stringify({ messages, effort: tier(opts.modelTier) }), signal: opts.signal });
+    } catch (e) { throw Object.assign(new Error('Not sent'), { code: e && e.name === 'AbortError' ? 'cancelled' : 'unavailable' }); }
+    const body = await res.json().catch(() => null);
+    if (!res.ok || !body || body.error) {
+      const c = body && body.error && body.error.code;
+      // The hosted version's own refusals (the daily limit, an expired invite) say what to do.
+      throw Object.assign(new Error((body && body.error && body.error.message) || 'No answer'), { code: c === 'refusal' ? 'refused' : c === 'rate_limited' ? 'rate_limited' : 'unavailable', plain: res.status === 429 || res.status === 401 });
+    }
+    if (opts.onText) opts.onText({ text: body.text, delta: body.text });
+    return { text: body.text, truncated: false };
+  };
+  const fn = (input, opts) => call(input, opts);
+  fn.json = async (input, opts) => {
+    const { text } = await call(input, opts);
+    const t = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+    const a = t.search(/[[{]/), b = Math.max(t.lastIndexOf('}'), t.lastIndexOf(']'));
+    try { return JSON.parse(t.slice(a, b + 1)); } catch (_) { throw Object.assign(new Error('Not JSON'), { code: 'invalid_json', text }); }
+  };
+  fn.local = true;
+  return fn;
+}
+AI.ready = useCap('sample').then(async s => {
+  if (s || !Engine || !Engine.serverStatus) return s;
+  const st = await Engine.serverStatus();
+  return st.available && st.chat ? localSample() : null;
+}).then(s => { AI.sample = s; AI.off = !s; if (!s && S.asAuto && S.asOpen && !S.glance) setAssistant(false, true); renderChat(); updateEmpty(); updateSelTools(); return s; });
 try { AI.deep = localStorage.getItem('cueboard.deep') === '1'; } catch (_) { }
 asDeep.checked = AI.deep;
 asDeep.addEventListener('change', () => { AI.deep = asDeep.checked; try { localStorage.setItem('cueboard.deep', AI.deep ? '1' : '0'); } catch (_) { } });
@@ -2669,7 +3008,7 @@ async function ask(text, opts) {
   chat.push(m);
   renderChat();
   const s = await AI.ready;
-  if (!s) { m.status = 'done'; m.error = 'The assistant needs this page to be open in Claude.'; renderChat(); if (opts.draft) { board().skipPrompt = false; updateEmpty(); } return; }
+  if (!s) { m.status = 'done'; m.error = 'The assistant needs a model: open this page in Claude, or run Cueboard with your API key.'; renderChat(); if (opts.draft) { board().skipPrompt = false; updateEmpty(); } return; }
   AI.busy = true; setBusy(true); updateEmpty();
   const ctl = new AbortController(); AI.ctl = ctl;
   const startBoard = S.boardId;
@@ -2695,8 +3034,8 @@ async function ask(text, opts) {
     if (code === 'cancelled') { m.text = e.text ? extractReply(e.text) : ''; m.error = 'Stopped.'; }
     else {
       m.text = (code !== 'refused' && e && e.text) ? extractReply(e.text) : '';
-      m.error = errCopy(code);
-      if (OFF_CODES.includes(code)) AI.off = true; else m.retry = text;
+      m.error = e && e.plain && e.message ? e.message : errCopy(code);
+      if (OFF_CODES.includes(code)) AI.off = true; else if (!(e && e.plain)) m.retry = text;
     }
   } finally {
     m.status = 'done';
@@ -2736,7 +3075,7 @@ function renderChat() {
     const intro = h('div', { class: 'as-intro' });
     if (AI.off) {
       intro.append(h('p', {}, h('strong', { text: 'Your prep partner' })),
-        h('div', { class: 'as-off', text: 'The assistant runs on your Claude account, so it works when this page is open in Claude. Everything else on the board works here on its own.' }));
+        h('div', { class: 'as-off' }, h('p', { text: 'The assistant needs a model. Open this page in Claude, or start Cueboard from a terminal where your API key is set:' }), h('code', { text: 'node scripts/serve.ts' }), h('p', { text: 'Everything else on the board works without it.' })));
     } else {
       const empty = !els().length;
       intro.append(h('p', {}, h('strong', { text: 'Your prep partner' }), 'It reads this board. Ask it to draft cards, turn rough notes into questions, chart numbers you give it, or poke holes before the call.'));
@@ -2790,10 +3129,22 @@ function updateCtx() {
 function setAssistant(open, quiet) {
   if (!quiet) S.asAuto = false;
   S.asOpen = open; asEl.hidden = !open;
+  app.classList.toggle('as-open', open);
   $('#b-ai').classList.toggle('on', open); $('#b-ai').setAttribute('aria-pressed', String(open));
   if (!quiet) { try { localStorage.setItem('cueboard.as', open ? '1' : '0'); } catch (_) { } }
   if (open) { renderChat(); updateCtx(); }
-  requestAnimationFrame(() => { positionSelTools(); positionPop(); });
+  requestAnimationFrame(() => { positionSelTools(); positionPop(); if (open) clearOfPanel(); });
+}
+// The panel floats over the board, so opening it slides the board out from under it, or zooms
+// out when the board is too wide to fit beside it.
+function clearOfPanel() {
+  if (narrow() || S.glance || !board() || !els().length) return;
+  const r = rectOf(els()); if (!r) return;
+  const z = S.view.z, left = r.x * z + S.view.x, right = (r.x + r.w) * z + S.view.x;
+  const limit = canvas.clientWidth - 396 - 28;
+  if (right <= limit) return;
+  if (right - limit <= left - 28) setView({ x: S.view.x - (right - limit), y: S.view.y, z }, true);
+  else fitAll(true);
 }
 function autoGrow() { asIn.style.height = 'auto'; asIn.style.height = Math.min(180, asIn.scrollHeight + 2) + 'px'; }
 asIn.addEventListener('input', autoGrow);
@@ -3346,6 +3697,7 @@ $('#empty-skip').addEventListener('click', () => { board().skipPrompt = true; up
 $('#empty-sample').addEventListener('click', () => openMenu('samples'));
 $('#empty-paste').addEventListener('click', () => openSheet('prep'));
 $('#b-notes').addEventListener('click', () => openSheet('notes'));
+$('#b-today').addEventListener('click', () => openToday());
 $('#g-done').addEventListener('click', exitGlance);
 $('#g-time').addEventListener('click', tToggle);
 $('#g-reset').addEventListener('click', () => { T.acc = 0; T.running = false; clearInterval(T.iv); tRender(); });
@@ -3382,6 +3734,12 @@ async function boot() {
   // who has started looking around; then refit once fonts settle, unless they've moved the view.
   const saved = await Store.ready;
   Mem.ready = Mem.ready || loadMemory();
+  granolaStatus().then(() => track('app_opened'));
+  Mem.ready.then(m => {
+    if (!m || S.touched || !Engine || !Engine.todayModel) return;
+    const t = Engine.todayModel(m, new Date().toISOString(), madeFor());
+    if (t.sections.length) openToday();
+  });
   if (saved.length) {
     for (const b of saved) {
       if (b.id === 'b-example' && S.touched) continue;
@@ -3395,6 +3753,7 @@ async function boot() {
   } else if (!S.touched) setStatus('example');
   try { if (document.fonts && document.fonts.ready) await Promise.race([document.fonts.ready, sleep(1500)]); } catch (_) { }
   if (!S.touched && !S.viewTouched && board().autoFit) fitAll(false);
+  S.booted = true;
   window.__cue = { S, els: () => els(), links: () => links() };
 }
 boot();

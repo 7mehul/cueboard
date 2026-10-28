@@ -17,9 +17,18 @@ export interface JsonRequest<T> {
 
 export interface Usage { inputTokens: number; outputTokens: number }
 
+// A plain conversation turn, for the board assistant, which answers in its own JSON format.
+export interface TextRequest {
+  messages: { role: 'user' | 'assistant'; content: string }[];
+  system?: string;
+  effort?: Effort;
+  maxTokens?: number;
+}
+
 export interface LLM {
   name: string;
   json<T>(req: JsonRequest<T>): Promise<{ value: T; usage?: Usage }>;
+  text?(req: TextRequest): Promise<{ text: string; usage?: Usage }>;
 }
 
 export type LLMErrorCode = 'refusal' | 'invalid' | 'unavailable' | 'rate_limited' | 'other';

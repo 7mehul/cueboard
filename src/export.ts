@@ -37,7 +37,7 @@ const cid = (id: string) => id.replace(/[^\w-]/g, '-').slice(0, 48);
 export function citeOf(s: Source): Cite {
   const date = isDate(s.seenAt) ? shortDate(s.seenAt) : undefined;
   // "After notes, Sep 16" already says when; don't repeat the date.
-  const at = (label: string, url?: string): Cite => ({ label, ...(date && !label.includes(date) ? { date } : {}), ...(url ? { url } : {}) });
+  const at = (label: string, url = s.url): Cite => ({ label, ...(date && !label.includes(date) ? { date } : {}), ...(url && /^https?:\/\//.test(url) ? { url } : {}) });
   switch (s.kind) {
     case 'web': {
       const m = /^https?:\/\/(?:www\.)?([^/?#]+)([^?#]*)/.exec(s.ref);

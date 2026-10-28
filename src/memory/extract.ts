@@ -1,5 +1,6 @@
 import type { LLM, Usage } from '../intel/llm.ts';
-import { BOARD_LINE, Extraction } from '../intel/schemas.ts';
+import { BOARD_LINE, ExtractionAnswer, fromAnswer } from '../intel/schemas.ts';
+import type { Extraction } from '../intel/schemas.ts';
 import type { Commitment, Company, Disclosure, Fact, FactTopic, Metric, Objection, Person, Source, SourceKind, Subject, Touch } from '../types.ts';
 import { MEETING_TYPES } from '../types.ts';
 import { fmtValue, isDate, longDate, ms, normalize, shortDate, wordCount } from '../text.ts';
@@ -34,11 +35,13 @@ Rules:
 - people: everyone who matters to the relationship, never the user. Set knownId when the person is in KNOWN PEOPLE. Only give an email that is written in the document.
 - numbers: value is a plain number in its unit (40800 for "$40.8k", 2.8 for "2.8%"). Reuse a KNOWN NUMBERS label for the same measure. sharedWith lists the people the user told this number to in this document, only when the user is the one telling.
 - promises: something someone said they would do. Resolve dates like "Friday" or "in two weeks" against the document date.
-- kept: KNOWN OPEN PROMISES this document shows were done. settled: KNOWN OBJECTIONS this document shows are no longer a concern.
+- resolved: KNOWN OPEN PROMISES this document shows were done, and KNOWN OBJECTIONS it shows are no longer a concern.
 - objections: concerns or pushback they raised, with the user's answer if one was given.
 - facts, by topic: role, background, connection (how they know the user), interest (what they care about), quote (something worth repeating back), company, news, fund, portfolio, pain, tools (what they use today), decision (who decides, how). For "self": proof (a proof point the user used), avoid (something this person has already heard and shouldn't hear again), opener, ask.
 - happened: if the document records an interaction that already took place, where things were left.
 - meeting: only if the document invites the user to a meeting that hasn't happened yet.
+- Some documents hold the user's own notes, an AI-written summary and a transcript. Quote the user's notes or the transcript where you can: an AI summary is someone else's paraphrase.
+- Every field is always present: use "" for anything the document doesn't give, and leave meeting.title or happened.summary "" when there is no meeting or no past interaction.
 - Leave out small talk, logistics, signatures, and anything you're unsure of. An empty list is better than a guess.`;
 
 const clip = (t: string, n: number) => (t.length > n ? t.slice(0, n - 1) + '…' : t);
@@ -78,8 +81,9 @@ export function readPrompt(memory: Memory, doc: Doc): string {
 }
 
 export async function readDoc(llm: LLM, memory: Memory, doc: Doc): Promise<{ proposal: Proposal; usage?: Usage }> {
-  const r = await llm.json({ step: 'extract', system: SYSTEM, prompt: readPrompt(memory, doc), schema: Extraction, effort: 'medium' });
-  return { proposal: propose(memory, doc, r.value), usage: r.usage };
+  const r = await llm.json({ step: 'extract', system: SYSTEM, prompt: readPrompt(memory, doc), schema: ExtractionAnswer, effort: 'medium' });
+  const isPromise = (id: string) => memory.commitments.some(c => c.id === id);
+  return { proposal: propose(memory, doc, fromAnswer(r.value, isPromise)), usage: r.usage };
 }
 
 // ---------- propose ----------
@@ -424,7 +428,7 @@ export function commit(memory: Memory, doc: Doc, proposal: Proposal, choice: Cho
 
   if (added) {
     const ref = doc.title?.trim() || SOURCE_REF[doc.kind];
-    const src: Source = { id: sourceId, kind, ref, seenAt: docDate, ownerId: m.userId };
+    const src: Source = { id: sourceId, kind, ref, seenAt: docDate, ownerId: m.userId, ...(doc.url ? { url: doc.url } : {}) };
     m.sources = m.sources.filter(s => s.id !== sourceId).concat(src);
     m.docs = m.docs.filter(d => d.id !== doc.id).concat({
       id: doc.id, kind: doc.kind, title: proposal.summary, text: doc.text.slice(0, 20000), date: docDate, sourceId, personIds: [...new Set(personId.values())],

@@ -1,6 +1,7 @@
 import type { LLM } from '../src/intel/llm.ts';
 import { LLMError } from '../src/intel/llm.ts';
 import { scripted } from '../src/intel/providers/scripted.ts';
+import { toAnswer } from '../src/intel/schemas.ts';
 import { STORY, bindKnown } from './docs.ts';
 
 // A stand-in model for trying the app without credentials (node scripts/serve.ts --fake-model).
@@ -14,12 +15,17 @@ function knownIn(prompt: string) {
 }
 
 export function fakeModel(): LLM {
-  return scripted({
+  const llm = scripted({
     extract: req => {
       const s = STORY.find(x => req.prompt.includes(x.doc.text.trim()));
       if (!s) throw new LLMError('unavailable', 'The fake model only knows the sample documents');
-      return bindKnown(s.ideal, knownIn(req.prompt));
+      return toAnswer(bindKnown(s.ideal, knownIn(req.prompt)));
     },
     understand: () => { throw new LLMError('unavailable', 'The fake model leaves the meeting to the rules'); },
   }, 'fake');
+  // The board assistant gets a polite stand-in reply, so the panel can be tried end to end.
+  return {
+    ...llm,
+    text: async () => ({ text: JSON.stringify({ reply: 'This is the stand-in model, so I can’t read your board yet. Start Cueboard with your API key and Claude answers here.', actions: [] }) }),
+  };
 }

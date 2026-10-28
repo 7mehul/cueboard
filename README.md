@@ -136,10 +136,22 @@ paste ─▶ read (model) ─▶ check (code) ─▶ review (you) ─▶ memory 
                            skip what's known
 ```
 
-- In the app: boards menu → Prep from emails and notes (or Paste emails and notes on an empty
-  board). Paste the invite, emails, your notes, someone's profile; check what it found; save and
-  get the board. After the call, Add notes on that board. Upcoming meetings in memory are listed
-  in the boards menu.
+- In the app: Today (the calendar button, and the front page whenever meetings are coming up)
+  lists your meetings with whether each board is ready, what changed since you last spoke and
+  what's owed, plus one paste box. Paste the invite, the email thread and your notes one after
+  another: each paste is kept apart, and `src/memory/split.ts` works out what each piece is and
+  its date (shown, and correctable, before anything is read). Check what it found, save, get the
+  board. After the call, Add notes on the board, or Add what happened on Today.
+- Notes already in Granola come in the same way: Import from Granola (on Today, and in the boards
+  menu) lists the last 60 days, you pick the meetings worth remembering, and each note is read and
+  checked like a paste. `src/memory/granola.ts` turns a note into one document: your notes, then
+  Granola's summary (labelled as written by Granola's AI, so quotes come from your notes or the
+  transcript where possible), then the transcript with you as "Me". Every record keeps a link back
+  to the note in Granola, shown in Float's sources. It needs a Granola API key (Business plan:
+  Settings → Connectors → API keys) set as `GRANOLA_API_KEY` where the server runs; the key stays
+  in the server. `--fake-granola` serves two sample notes from `scenarios/granola.ts`.
+- The Assistant panel works the same way: in Claude it uses the viewer's Claude; locally, the
+  server's model.
 - Reading needs a model. Locally, run `node scripts/serve.ts` in a terminal where
   `ANTHROPIC_API_KEY` is set: the server makes the model calls, so the key never reaches the page,
   and it only answers the page it serves. In a published artifact, the viewer's own Claude is used.
@@ -154,13 +166,52 @@ node scripts/eval-extract.ts --verbose     # a real model reads the six sample d
 ## Run it
 
 ```bash
-npm test                                   # 74 tests: behaviour, the checker catching each broken rule, the judgment layer, memory
+npm test                                   # 95 tests: behaviour, the checker catching each broken rule, the judgment layer, memory, Today, Granola, the hosted gate
 node scripts/show.ts followup              # print a board as text (first | followup | seed:<n>)
 node scripts/scale.ts --n 1000000          # generate, build and check a million boards
 node scripts/scale.ts --n 200000 --edge 0.5   # same, with planted problems in half the packets
 node scripts/gallery.ts                    # render sample boards to reports/gallery.html
 npm run typecheck
 ```
+
+## Hosted test version
+
+`node scripts/serve.ts --hosted` is the same app on the internet for a handful of testers, with
+your Anthropic key on the server. On top of the local version it adds:
+
+- **Invite codes.** Everything is behind `/join`. A tester opens their link
+  (`https://<host>/join#<code>`; the code after `#` never reaches the server's logs) and gets a
+  signed session cookie for 60 days. Taking their `name:code` out of `CUE_INVITES` ends their access.
+- **A daily allowance.** Model calls per tester per day (`CUE_DAILY_CALLS`, 150) and for everyone
+  (`CUE_DAILY_TOTAL`, 1000), reset at midnight UTC. Past it, boards still open and Float works;
+  new reads say why they stopped.
+- **A usage log of actions, never content:** app opened, Today opened, board made, board opened,
+  Float opened, memory saved, and each model call with its tokens. It goes to stdout and, with
+  `CUE_DATA_DIR`, to `usage.jsonl` there. `/admin` (for names in `CUE_ADMINS`) shows one row per
+  tester, including whether they made a second board within 14 days of their first.
+- **No Granola.** The server's Granola key would hand one person's notes to every tester.
+
+Testers' boards and memory stay in their own browser; the join page tells them so, and that what
+they paste goes to Anthropic's Claude.
+
+Try it on this machine with the fake model and the public sample settings in `deploy/local.env`
+(which only work from this machine), then open `/join` with the tester code from that file:
+
+```bash
+node --env-file=deploy/local.env scripts/serve.ts 5183 --hosted --fake-model
+```
+
+Deploy on Render (`render.yaml`, `Dockerfile`): push the repo, then in Render choose New →
+Blueprint and pick it. Render generates `CUE_SECRET` and asks for `ANTHROPIC_API_KEY`,
+`CUE_INVITES` and `CUE_ADMINS`. Make invites in your own terminal; it prints the value to set and
+one link per person:
+
+```bash
+node scripts/invite.ts maya ben priya --url https://your-app.onrender.com
+```
+
+Adding someone later: `node scripts/invite.ts sam --add "<current CUE_INVITES>"`, set the new value,
+and Render restarts with it.
 
 ## Files
 
@@ -182,11 +233,18 @@ npm run typecheck
 | `scenarios/` | Six persona situations with what a right board shows, hides and asks; `docs.ts` is a founder–investor story as pasted documents |
 | `src/memory/extract.ts` | Reading a document into memory: the model's step, the checks, and saving what the user kept |
 | `src/memory/packet.ts` | A meeting's packet, as memory seen from that meeting |
+| `src/memory/split.ts` | One paste into several documents: where each starts, what it is, when it's from |
+| `src/memory/today.ts` | What Today shows: meetings by day, board status, changes since last time, what's owed |
+| `src/memory/granola.ts` | A Granola note (from its public API) as one document to read into memory |
 | `src/intel/providers/server.ts` | The page's model through the local server (`scripts/serve.ts`) |
 | `src/export.ts` | Converts an engine board into canvas items, keeping memory and gap markers |
 | `app/board.js`, `app/board.css`, `app/index.html` | The freeform canvas (from the prototype, extended) |
 | `app/float.css` | The floating in-call window (its code is the float section of `board.js`) |
 | `app/engine-entry.ts` | What the canvas gets from the engine: sample meetings and `boardFor()` |
+| `scripts/serve.ts` | The local server, and with `--hosted` the test version on the internet |
+| `scripts/gate.ts`, `scripts/hosted-pages.ts` | The hosted version's invites, sessions, allowance and usage log; its invite and usage pages |
+| `scripts/invite.ts` | Makes invite codes and links for testers |
+| `Dockerfile`, `render.yaml`, `deploy/local.env` | Running the hosted version on Render, and trying it locally |
 | `synth/` | Seeded synthetic packet generator that plants realistic problems |
 | `test/fixtures.ts` | The Dana Ruiz first meeting and follow-up |
 

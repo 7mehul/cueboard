@@ -9,6 +9,7 @@ import { buildBoard } from '../src/engine.ts';
 import { checkBoard } from '../src/check.ts';
 import { scripted } from '../src/intel/providers/scripted.ts';
 import type { Extraction } from '../src/intel/schemas.ts';
+import { fromAnswer, toAnswer } from '../src/intel/schemas.ts';
 import { STORY, STORY_USER, bindKnown } from '../scenarios/docs.ts';
 
 const idsFrom = (m: Memory) => ({
@@ -105,7 +106,7 @@ test('only what the document is about goes to the model', async () => {
   assert.match(prompt, /Maya Chen/);
   assert.doesNotMatch(prompt, /Grace/);
   assert.match(prompt, /Alex Rivera <alex@cueboard.app>, Founder & CEO at Cueboard/);
-  const llm = scripted({ extract: () => bindKnown(STORY[2].ideal, idsFrom(m)) });
+  const llm = scripted({ extract: () => toAnswer(bindKnown(STORY[2].ideal, idsFrom(m))) });
   const r = await readDoc(llm, m, STORY[2].doc);
   assert.ok(r.proposal.items.length > 5);
   await assert.rejects(readDoc(scripted({ extract: () => ({ nope: 1 }) }), m, STORY[2].doc), /schema/);
@@ -151,4 +152,14 @@ test('the packet only carries documents about the people coming', () => {
   m.docs.push({ id: 'dx', kind: 'notes', title: 'Notes about someone else', text: 'SECRET other deal', date: '2026-10-10', sourceId: 's-dx', personIds: ['p-someone'] });
   const p = packetFor(m, meetings[1], '2026-10-21T09:00:00-04:00')!;
   assert.ok(!p.context!.some(d => /SECRET/.test(d.text)));
+});
+
+test('the model’s flat answer turns back into the same reading, with done and settled told apart', () => {
+  for (const s of STORY) {
+    const x = bindKnown(s.ideal, { maya: 'p-maya', ben: 'p-ben', larkspur: 'co-l', cohort: 'c-1', 'intro-ben': 'c-2' });
+    assert.deepEqual(fromAnswer(toAnswer(x), id => id.startsWith('c-')), x, s.doc.id);
+  }
+  const a = toAnswer(bindKnown(STORY[2].ideal, {}));
+  a.facts.push({ about: 'p1', topic: 'gossip', text: 'Likes sailing', quote: 'Good energy.' });
+  assert.ok(!fromAnswer(a, () => true).facts.some(f => f.text === 'Likes sailing'), 'a topic outside the list is left out');
 });

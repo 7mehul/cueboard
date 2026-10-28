@@ -34,6 +34,7 @@
     <header id="topbar">
       <div class="group" id="tb-left">
         <button class="btn icon-only" id="b-menu" type="button" aria-label="Your boards" aria-haspopup="menu" aria-expanded="false" title="Your boards"><span data-ic="boards"></span></button>
+        <button class="btn icon-only" id="b-today" type="button" aria-label="Today" title="Today: your meetings and what’s ready"><span data-ic="calendar"></span></button>
         <input id="title" aria-label="Board title" maxlength="120" autocomplete="off" spellcheck="false">
         <span class="chip" id="ex-chip" hidden>Example</span>
         <span id="status" aria-live="polite"></span>
@@ -41,11 +42,11 @@
       <div class="group" id="tb-right">
         <button class="btn icon-only hide-sm" id="b-undo" type="button" aria-label="Undo" title="Undo"><span data-ic="undo"></span></button>
         <button class="btn icon-only hide-sm" id="b-redo" type="button" aria-label="Redo" title="Redo"><span data-ic="redo"></span></button>
-        <button class="btn" id="b-tidy" type="button" title="Arrange everything into neat columns"><span data-ic="tidy"></span><span class="lbl lbl-md">Tidy</span></button>
-        <button class="btn" id="b-ai" type="button" aria-pressed="false"><span data-ic="spark"></span><span class="lbl">Assistant</span></button>
-        <button class="btn" id="b-notes" type="button" hidden title="Add notes or emails about this meeting to memory"><span data-ic="note"></span><span class="lbl lbl-md">Add notes</span></button>
-        <button class="btn" id="b-float" type="button" aria-pressed="false" title="A small window that floats over your meeting (F)"><span data-ic="popout"></span><span class="lbl lbl-md">Float</span></button>
-        <button class="btn primary" id="b-glance" type="button" title="Read-only view for during the meeting"><span data-ic="glance"></span><span class="lbl">Glance</span></button>
+        <button class="btn" id="b-tidy" aria-label="Tidy" type="button" title="Arrange everything into neat columns"><span data-ic="tidy"></span><span class="lbl lbl-md">Tidy</span></button>
+        <button class="btn" id="b-ai" type="button" aria-pressed="false" aria-label="Assistant" title="Ask about this board, or tell it what to add"><span data-ic="spark"></span><span class="lbl">Assistant</span></button>
+        <button class="btn" id="b-notes" aria-label="Add notes" type="button" hidden title="Add notes or emails about this meeting to memory"><span data-ic="note"></span><span class="lbl lbl-md">Add notes</span></button>
+        <button class="btn" id="b-float" aria-label="Float" type="button" aria-pressed="false" title="A small window that floats over your meeting (F)"><span data-ic="popout"></span><span class="lbl lbl-md">Float</span></button>
+        <button class="btn primary" id="b-glance" aria-label="Glance" type="button" title="Read-only view for during the meeting"><span data-ic="glance"></span><span class="lbl">Glance</span></button>
       </div>
     </header>
 

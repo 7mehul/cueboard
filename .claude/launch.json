@@ -16,9 +16,22 @@
       "runtimeArgs": [
         "scripts/serve.ts",
         "5181",
-        "--fake-model"
+        "--fake-model",
+        "--fake-granola"
       ],
       "port": 5181
+    },
+    {
+      "name": "cueboard-hosted",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "--env-file=deploy/local.env",
+        "scripts/serve.ts",
+        "5183",
+        "--hosted",
+        "--fake-model"
+      ],
+      "port": 5183
     }
   ]
 }
