@@ -15,6 +15,10 @@ services:
         sync: false
       - key: CUE_SECRET
         generateValue: true
+      - key: GOOGLE_CLIENT_ID      # Google Calendar: see README "Calendar"; redirect https://<your app>.onrender.com/oauth/google/callback
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
       - key: CUE_DAILY_CALLS
         value: "150"
       - key: CUE_DAILY_TOTAL

@@ -68,7 +68,7 @@ export class Limiter {
 }
 
 // What the page may report. Each is an action, never content: no titles, names or text.
-export const CLIENT_EVENTS = new Set(['app_opened', 'today_opened', 'board_made', 'board_opened', 'float_opened', 'memory_saved']);
+export const CLIENT_EVENTS = new Set(['app_opened', 'today_opened', 'board_made', 'board_drafted', 'board_refreshed', 'board_opened', 'float_opened', 'memory_saved', 'calendar_connected']);
 
 export type UsageEvent = { t: string; who: string; ev: string; kind?: string; n?: number; tokens?: number; ms?: number; ok?: boolean };
 
@@ -86,7 +86,7 @@ const day = (t: string | Date) => (typeof t === 'string' ? t : t.toISOString()).
 
 export type TesterRow = {
   who: string; first: string; last: string; days: number;
-  boards: number; opened: number; float: number; saved: number; calls: number; tokens: number;
+  boards: number; drafted: number; opened: number; float: number; saved: number; calls: number; tokens: number; calendar: boolean;
   secondBoard: 'yes' | 'no' | 'not yet' | '—';
 };
 
@@ -134,11 +134,13 @@ export class Usage {
     const rows = new Map<string, TesterRow & { daySet: Set<string>; madeAt: number[] }>();
     for (const e of this.events) {
       let r = rows.get(e.who);
-      if (!r) rows.set(e.who, r = { who: e.who, first: e.t, last: e.t, days: 0, boards: 0, opened: 0, float: 0, saved: 0, calls: 0, tokens: 0, secondBoard: '—', daySet: new Set(), madeAt: [] });
+      if (!r) rows.set(e.who, r = { who: e.who, first: e.t, last: e.t, days: 0, boards: 0, drafted: 0, opened: 0, float: 0, saved: 0, calls: 0, tokens: 0, calendar: false, secondBoard: '—', daySet: new Set(), madeAt: [] });
       if (e.t < r.first) r.first = e.t;
       if (e.t > r.last) r.last = e.t;
       r.daySet.add(day(e.t));
       if (e.ev === 'board_made') { r.boards++; r.madeAt.push(Date.parse(e.t)); }
+      else if (e.ev === 'board_drafted') r.drafted++;
+      else if (e.ev === 'calendar_connected') r.calendar = true;
       else if (e.ev === 'board_opened') r.opened++;
       else if (e.ev === 'float_opened') r.float++;
       else if (e.ev === 'memory_saved') r.saved++;

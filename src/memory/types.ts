@@ -18,6 +18,10 @@ export interface MeetingRecord {
   attendeeIds: string[];
   goal?: string;
   sourceId: string;
+  // Meetings from a connected calendar: the event they mirror, and whether it was called off,
+  // declined or lost its outside guests since. The calendar is the truth for time and people.
+  calendar?: { id: string; url?: string; joinUrl?: string };
+  cancelled?: boolean;
 }
 
 // The document itself, kept so the model can read it again when preparing for these people.

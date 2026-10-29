@@ -14,6 +14,8 @@ import { packetFor, upcoming } from '../src/memory/packet.ts';
 import { PASTE_BREAK, splitPaste } from '../src/memory/split.ts';
 import { todayModel } from '../src/memory/today.ts';
 import { granolaToDoc } from '../src/memory/granola.ts';
+import { meetingInputs, prepPlan, syncCalendar } from '../src/memory/calendar.ts';
+import { mergeRefresh } from '../src/refresh.ts';
 import { emptyMemory } from '../src/memory/types.ts';
 import type { Doc, Memory } from '../src/memory/types.ts';
 import { generate } from '../synth/generate.ts';
@@ -63,7 +65,7 @@ export async function boardForSmart(sampleId: string, sample: unknown) {
 // Which model the page can use: Claude inside a published artifact, or the local server's.
 export function modelFor(sample: unknown): LLM { return artifactModel(sample as Parameters<typeof artifactModel>[0]); }
 export function localModel(): LLM { return serverModel('/api/llm', 'local'); }
-export { serverStatus, upcoming, splitPaste, PASTE_BREAK, todayModel, granolaToDoc };
+export { serverStatus, upcoming, splitPaste, PASTE_BREAK, todayModel, granolaToDoc, syncCalendar, meetingInputs, prepPlan, mergeRefresh };
 
 // Memory as saved by the page: whatever is missing is filled in, so an older save still loads.
 export function reviveMemory(raw: unknown, userId: string): Memory {

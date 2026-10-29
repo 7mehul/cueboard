@@ -3,12 +3,15 @@
 // Usage: node scripts/serve.ts [port] [--fake-model] [--fake-granola] [--hosted]
 //   With ANTHROPIC_API_KEY (or a signed-in profile) set, the page gets Claude (CUE_MODEL to pick).
 //   With GRANOLA_API_KEY set, the page can bring in Granola notes (read-only).
-//   --fake-model answers for the sample documents only; --fake-granola serves two sample notes.
+//   With GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET set, people can connect Google Calendar.
+//   --fake-model answers for the sample documents only; --fake-granola serves two sample notes;
+//   --fake-calendar serves a sample week of meetings and connects without Google.
 //   --hosted is the test version on the internet: invite codes, a daily allowance of model calls
 //   per tester, and a usage log. It needs CUE_INVITES and CUE_SECRET; see README "Hosted test".
 import { createServer } from 'node:http';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { SCHEMAS } from '../src/intel/schemas.ts';
@@ -16,6 +19,7 @@ import { LLMError } from '../src/intel/llm.ts';
 import type { LLM } from '../src/intel/llm.ts';
 import { Limiter, Usage, clientEvent, cookie, parseInvites, sessionName, sessionToken, SESSION_DAYS } from './gate.ts';
 import { adminPage, joinPage } from './hosted-pages.ts';
+import { GoogleError, authUrl, exchangeCode, listEvents, refreshAccess, revoke, sealer } from './google.ts';
 
 const args = process.argv.slice(2);
 const hosted = args.includes('--hosted');
@@ -55,6 +59,22 @@ const GRANOLA = 'https://public-api.granola.ai/v1';
 const granolaKey = hosted ? undefined : process.env.GRANOLA_API_KEY;
 if (hosted && process.env.GRANOLA_API_KEY) console.warn('GRANOLA_API_KEY is ignored in the hosted version');
 const fakeGranola = !hosted && args.includes('--fake-granola') ? (await import('../scenarios/granola.ts')).GRANOLA_NOTES : null;
+
+// Google Calendar, read-only. The grant is sealed into a cookie with the hosted secret, or with a
+// key this machine keeps in data/ (never committed), so restarting keeps people connected.
+const googleId = process.env.GOOGLE_CLIENT_ID, googleSecret = process.env.GOOGLE_CLIENT_SECRET;
+const fakeCalendar = args.includes('--fake-calendar') ? await import('../scenarios/calendar.ts') : null;
+const calendarOn = !!(googleId && googleSecret) || !!fakeCalendar;
+async function localKey(): Promise<string> {
+  const dir = new URL('../data/', import.meta.url), file = new URL('local.key', dir);
+  const k = (await readFile(file, 'utf8').catch(() => '')).trim();
+  if (k.length >= 32) return k;
+  await mkdir(dir, { recursive: true });
+  const fresh = randomBytes(32).toString('hex');
+  await writeFile(file, fresh, { mode: 0o600 });
+  return fresh;
+}
+const seal = sealer(H ? H.secret : await localKey());
 
 const build = fileURLToPath(new URL('./build-app.ts', import.meta.url));
 if (hosted) { if (spawnSync(process.execPath, [build], { stdio: 'inherit' }).status !== 0) fail('the app didn’t build'); }
@@ -216,6 +236,87 @@ async function granolaApi(req: IncomingMessage, res: ServerResponse, path: strin
   }
 }
 
+// Google Calendar. The page asks for events; the server reads them with the grant in the cookie.
+type Grant = { rt?: string; fake?: boolean; at: number };
+const GCAL = 'cue_gcal', OAUTH = 'cue_oauth';
+const access = new Map<string, { token: string; exp: number }>();
+const cookieFlags = (req: IncomingMessage, maxAge: number) => `Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${https(req) ? '; Secure' : ''}`;
+const grantOf = (req: IncomingMessage) => seal.open<Grant>(cookie(req.headers.cookie, GCAL));
+const redirectUri = (req: IncomingMessage) => `${https(req) ? 'https' : 'http'}://${req.headers.host}/oauth/google/callback`;
+const back = (res: ServerResponse, to: string, cookies: string[] = []) => res.writeHead(302, { location: to, 'cache-control': 'no-store', ...(cookies.length ? { 'set-cookie': cookies } : {}) }).end();
+
+async function accessToken(rt: string, fresh = false): Promise<string> {
+  const hit = access.get(rt);
+  if (!fresh && hit && hit.exp > Date.now() + 60_000) return hit.token;
+  const t = await refreshAccess({ clientId: googleId!, clientSecret: googleSecret!, refreshToken: rt });
+  access.set(rt, { token: t.accessToken, exp: Date.now() + t.expiresIn * 1000 });
+  if (access.size > 500) access.delete(access.keys().next().value!);
+  return t.accessToken;
+}
+
+async function calendarApi(req: IncomingMessage, res: ServerResponse, path: string, who: string | null) {
+  if (!allowed(req)) { notAllowed(res); return; }
+  const grant = grantOf(req);
+  if (path === '/api/calendar' && req.method === 'GET') {
+    send(res, 200, { configured: calendarOn, connected: !!(grant && (grant.rt || grant.fake)), ...(fakeCalendar ? { fake: true } : {}), ...(hosted ? { hosted: true } : {}) }); return;
+  }
+  if (path === '/api/calendar/disconnect' && req.method === 'POST') {
+    if (grant?.rt) { await revoke(grant.rt); access.delete(grant.rt); }
+    send(res, 200, { ok: true }, { 'set-cookie': `${GCAL}=; ${cookieFlags(req, 0)}` }); return;
+  }
+  if (path === '/api/calendar/events' && req.method === 'GET') {
+    if (!calendarOn) { send(res, 503, { error: { code: 'unavailable', message: 'Google Calendar isn’t set up on this server.' } }); return; }
+    if (!grant || (!grant.rt && !grant.fake)) { send(res, 401, { error: { code: 'reconnect', message: 'Connect your Google Calendar first.' } }); return; }
+    const now = Date.now(), from = new Date(now - 14 * 864e5).toISOString(), to = new Date(now + 14 * 864e5).toISOString();
+    if (grant.fake && fakeCalendar) { send(res, 200, { email: fakeCalendar.FAKE_SELF, from, to, events: fakeCalendar.fakeEvents(new Date(now)) }); return; }
+    try {
+      let r;
+      try { r = await listEvents(await accessToken(grant.rt!), from, to); }
+      catch (e) { if (e instanceof GoogleError && e.code === 'expired') r = await listEvents(await accessToken(grant.rt!, true), from, to); else throw e; }
+      console.log(`calendar${tag(who)} · ${r.events.length} events`);
+      send(res, 200, { ...(r.email ? { email: r.email } : {}), from, to, events: r.events });
+    } catch (e) {
+      const reconnect = e instanceof GoogleError && e.code === 'reconnect';
+      console.log(`calendar${tag(who)} failed · ${(e as Error).message}`);
+      if (reconnect) send(res, 401, { error: { code: 'reconnect', message: (e as Error).message } }, { 'set-cookie': `${GCAL}=; ${cookieFlags(req, 0)}` });
+      else send(res, 502, { error: { code: 'unavailable', message: `Couldn’t read your calendar: ${(e as Error).message}` } });
+    }
+    return;
+  }
+  send(res, 404, { error: { code: 'other', message: 'Unknown calendar route' } });
+}
+
+// Connecting: off to Google with a one-time state tied to this browser, and back with a grant.
+async function oauth(req: IncomingMessage, res: ServerResponse, path: string, query: URLSearchParams) {
+  if (!calendarOn || req.method !== 'GET') { res.writeHead(404).end('not found'); return; }
+  if (path === '/oauth/google/start') {
+    if (fakeCalendar) { back(res, '/?calendar=connected', [`${GCAL}=${seal.seal({ fake: true, at: Date.now() })}; ${cookieFlags(req, 180 * 86400)}`]); return; }
+    const nonce = randomBytes(18).toString('base64url');
+    back(res, authUrl({ clientId: googleId!, redirectUri: redirectUri(req), state: nonce }), [`${OAUTH}=${nonce}; ${cookieFlags(req, 600)}`]);
+    return;
+  }
+  if (path === '/oauth/google/callback') {
+    const clear = `${OAUTH}=; ${cookieFlags(req, 0)}`;
+    const state = query.get('state') ?? '', nonce = cookie(req.headers.cookie, OAUTH) ?? '', code = query.get('code');
+    const same = state.length > 0 && state.length === nonce.length && timingSafeEqual(Buffer.from(state), Buffer.from(nonce));
+    if (!same) { back(res, '/?calendar=failed', [clear]); return; }
+    if (query.get('error') || !code) { back(res, '/?calendar=denied', [clear]); return; }
+    try {
+      const t = await exchangeCode({ clientId: googleId!, clientSecret: googleSecret!, redirectUri: redirectUri(req), code });
+      if (!t.scope.includes('calendar')) { back(res, '/?calendar=denied', [clear]); return; }
+      if (!t.refreshToken) { back(res, '/?calendar=failed', [clear]); return; }
+      access.set(t.refreshToken, { token: t.accessToken, exp: Date.now() + t.expiresIn * 1000 });
+      console.log('calendar connected');
+      back(res, '/?calendar=connected', [clear, `${GCAL}=${seal.seal({ rt: t.refreshToken, at: Date.now() })}; ${cookieFlags(req, 180 * 86400)}`]);
+    } catch (e) {
+      console.log(`calendar connect failed · ${(e as Error).message}`);
+      back(res, '/?calendar=failed', [clear]);
+    }
+    return;
+  }
+  res.writeHead(404).end('not found');
+}
+
 // The hosted front door. Returns who is asking, or answers the request itself and returns null.
 const SESSION = 'cue_session';
 async function gate(req: IncomingMessage, res: ServerResponse, path: string): Promise<string | null> {
@@ -272,6 +373,8 @@ createServer(async (req, res) => {
   if (path === '/api/llm') { await api(req, res, who); return; }
   if (path === '/api/chat') { await chatApi(req, res, who); return; }
   if (path === '/api/granola' || path.startsWith('/api/granola/')) { await granolaApi(req, res, path, url.searchParams); return; }
+  if (path === '/api/calendar' || path.startsWith('/api/calendar/')) { await calendarApi(req, res, path, who); return; }
+  if (path.startsWith('/oauth/google/')) { await oauth(req, res, path, url.searchParams); return; }
   const file = path === '/' ? 'cueboard.html' : path.slice(1);
   if (file.includes('..')) { res.writeHead(400).end(); return; }
   try {
@@ -282,5 +385,5 @@ createServer(async (req, res) => {
     res.writeHead(404).end('not found');
   }
 }).listen(port, hosted ? '0.0.0.0' : '127.0.0.1', () => console.log(hosted
-  ? `hosted test version on port ${port} · model: ${llm ? llm.name : 'none (set ANTHROPIC_API_KEY)'} · ${H!.names.size} invites · ${H!.perTester} model calls per tester a day, ${H!.total} in all · usage log: ${process.env.CUE_DATA_DIR ? process.env.CUE_DATA_DIR + '/usage.jsonl' : 'stdout only (set CUE_DATA_DIR to keep it)'}`
-  : `serving http://localhost:${port} · model: ${llm ? llm.name : 'none (rules only; set ANTHROPIC_API_KEY for Claude)'} · Granola: ${fakeGranola ? 'sample notes' : granolaKey ? 'connected' : 'off (set GRANOLA_API_KEY)'}`));
+  ? `hosted test version on port ${port} · model: ${llm ? llm.name : 'none (set ANTHROPIC_API_KEY)'} · calendar: ${calendarOn ? 'on' : 'off (set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)'} · ${H!.names.size} invites · ${H!.perTester} model calls per tester a day, ${H!.total} in all · usage log: ${process.env.CUE_DATA_DIR ? process.env.CUE_DATA_DIR + '/usage.jsonl' : 'stdout only (set CUE_DATA_DIR to keep it)'}`
+  : `serving http://localhost:${port} · model: ${llm ? llm.name : 'none (rules only; set ANTHROPIC_API_KEY for Claude)'} · Granola: ${fakeGranola ? 'sample notes' : granolaKey ? 'connected' : 'off (set GRANOLA_API_KEY)'} · calendar: ${fakeCalendar ? 'sample week' : calendarOn ? 'on' : 'off (set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)'}`));

@@ -1,5 +1,6 @@
 import { firstName, fmtValue, isDate, ms, pctChange } from '../text.ts';
 import type { MeetingRecord, Memory } from './types.ts';
+import { unrecordedMeetings } from './calendar.ts';
 
 // What the Today view shows: the meetings ahead, whether each board is ready, what changed since
 // you last spoke, and what's owed. Worked out from memory alone; the page only draws it.
@@ -18,6 +19,7 @@ export interface TodayMeeting {
   since?: string;          // "MRR $38.5k, up from the $33k you told Maya"
   owed: { text: string; overdue: boolean }[];
   notesFor?: string;       // the earlier meeting whose notes aren't in yet
+  joinUrl?: string;        // the call link, from the calendar
 }
 export interface TodaySection { key: 'earlier' | 'today' | 'tomorrow' | 'week' | 'later'; label: string; meetings: TodayMeeting[] }
 export interface OwedItem { text: string; due?: string; overdue: boolean; theirs: boolean }
@@ -42,15 +44,19 @@ export function todayModel(memory: Memory, now: string, withBoards: string[]): T
     (x.kind === 'meeting' || x.kind === 'call') && x.personIds.some(id => m.attendeeIds.includes(id))
     && dayOf(x.date) >= dayOf(m.startsAt) && dayOf(x.date) < dayOf(m.startsAt) + 3 * DAY);
 
+  // Meetings the calendar says happened count, even before their notes are in.
+  const touches = [...memory.touches, ...unrecordedMeetings(memory, t)];
   const describe = (m: MeetingRecord): TodayMeeting => {
     const coming = new Set(m.attendeeIds);
     const start = ms(m.startsAt);
-    const prior = memory.touches.filter(x => (x.kind === 'meeting' || x.kind === 'call') && dayOf(x.date) < dayOf(m.startsAt) && x.personIds.some(id => coming.has(id)));
+    const prior = touches.filter(x => (x.kind === 'meeting' || x.kind === 'call') && dayOf(x.date) < dayOf(m.startsAt) && x.personIds.some(id => coming.has(id)));
     const earlier = memory.meetings
-      .filter(o => o.id !== m.id && end(o) <= t && ms(o.startsAt) < start && o.attendeeIds.some(id => coming.has(id)))
+      .filter(o => o.id !== m.id && !o.cancelled && end(o) <= t && ms(o.startsAt) < start && o.attendeeIds.some(id => coming.has(id)))
       .sort((a, b) => ms(b.startsAt) - ms(a.startsAt))[0];
     const past = end(m) <= t;
-    const status: MeetingStatus = past ? 'add_notes' : earlier && !hasNotes(earlier) ? 'needs_notes' : made.has(m.id) ? 'ready' : 'not_prepped';
+    // A board that's already drafted is ready; it still asks for the last call's notes, if missing.
+    const missing = !!earlier && !hasNotes(earlier);
+    const status: MeetingStatus = past ? 'add_notes' : made.has(m.id) ? 'ready' : missing ? 'needs_notes' : 'not_prepped';
     return {
       id: m.id, title: m.title, startsAt: m.startsAt, durationMin: m.durationMin,
       people: m.attendeeIds.map(id => people.get(id)?.name).filter((x): x is string => !!x),
@@ -58,12 +64,13 @@ export function todayModel(memory: Memory, now: string, withBoards: string[]): T
       ...(m.goal ? { goal: m.goal } : {}),
       ...sinceLine(memory, m, t),
       owed: owedWith(memory, m, t),
-      ...(status === 'needs_notes' && earlier ? { notesFor: earlier.id } : {}),
+      ...(!past && missing ? { notesFor: earlier!.id } : {}),
+      ...(m.calendar?.joinUrl ? { joinUrl: m.calendar.joinUrl } : {}),
     };
   };
 
   const buckets: Record<TodaySection['key'], TodayMeeting[]> = { earlier: [], today: [], tomorrow: [], week: [], later: [] };
-  for (const m of [...memory.meetings].sort((a, b) => ms(a.startsAt) - ms(b.startsAt))) {
+  for (const m of memory.meetings.filter(x => !x.cancelled).sort((a, b) => ms(a.startsAt) - ms(b.startsAt))) {
     const day = dayOf(m.startsAt);
     if (end(m) <= t) {
       // Recent meetings only come back to ask what happened.

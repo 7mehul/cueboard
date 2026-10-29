@@ -166,13 +166,55 @@ node scripts/eval-extract.ts --verbose     # a real model reads the six sample d
 ## Run it
 
 ```bash
-npm test                                   # 95 tests: behaviour, the checker catching each broken rule, the judgment layer, memory, Today, Granola, the hosted gate
+npm test                                   # 111 tests: behaviour, the checker catching each broken rule, the judgment layer, memory, Today, Granola, calendar, refresh, the hosted gate
 node scripts/show.ts followup              # print a board as text (first | followup | seed:<n>)
 node scripts/scale.ts --n 1000000          # generate, build and check a million boards
 node scripts/scale.ts --n 200000 --edge 0.5   # same, with planted problems in half the packets
 node scripts/gallery.ts                    # render sample boards to reports/gallery.html
 npm run typecheck
 ```
+
+## Calendar: boards without asking
+
+Connect Google Calendar on Today and Cueboard reads it (read-only) when it opens, every ten
+minutes while it's open, and when you come back to the tab. Then:
+
+- **Meetings come in by themselves.** Every event with someone from outside your company becomes a
+  meeting in memory; internal meetings, focus time, declined invites and all-day events don't.
+  Guests become people, matched by email to anyone you already know; their company comes from
+  the email domain (never from gmail.com and the like). Whatever the invite says beyond the dial-in
+  details becomes a document the model reads. No model call is involved in any of this
+  (`src/memory/calendar.ts`).
+- **Boards draft themselves.** Every meeting today and tomorrow gets its board without a click, soonest
+  first (`prepPlan`). Today marks them "Drafted for you".
+- **One board per meeting, kept up to date.** Each board remembers what was drafted and a fingerprint
+  of what it was drafted from (`meetingInputs`): the meeting, the people coming, what memory holds
+  about them, your numbers, earlier meetings with them. When that changes (new notes, a moved
+  meeting, a new guest) the board is refreshed in place (`src/refresh.ts`): lines and cards you
+  haven't touched take the new content, anything you wrote, changed, added or deleted stays as you
+  left it, line by line, and nothing moves except to make room. A board on screen isn't changed
+  under you; it offers the update.
+- **Past meetings count.** A meeting the calendar says happened, with no notes in memory, makes the
+  next board a follow-up that says so ("No notes from it yet"), and Today asks for those notes.
+- The Google grant is sealed into a cookie only this server can read, so the server keeps no one's
+  calendar access. Disconnecting revokes it; meetings already read stay in memory.
+
+Setting it up (once, in Google Cloud):
+
+1. Create a project, and enable the **Google Calendar API**.
+2. Google Auth Platform: app name Cueboard, audience **External**, data access
+   `calendar.events.readonly`, and add each tester's Google account under **Test users** (up to 100).
+3. Clients → create a **Web application** client with these redirect addresses:
+   `http://localhost:5180/oauth/google/callback` and, for the hosted version,
+   `https://<your app>.onrender.com/oauth/google/callback`.
+4. Start Cueboard with `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` set (in Render, in its
+   environment settings). Open it at `localhost:5180`, not `127.0.0.1`, so the address matches.
+
+While the Google app is in testing, Google ends each person's access after 7 days; Today then asks
+them to connect again. Publishing the app removes that; calendar access is a "sensitive" scope, so
+Google reviews it (a privacy policy and a homepage are needed), but no paid security assessment.
+
+`--fake-calendar` serves a sample week (`scenarios/calendar.ts`) and connects without Google.
 
 ## Hosted test version
 
@@ -236,6 +278,9 @@ and Render restarts with it.
 | `src/memory/split.ts` | One paste into several documents: where each starts, what it is, when it's from |
 | `src/memory/today.ts` | What Today shows: meetings by day, board status, changes since last time, what's owed |
 | `src/memory/granola.ts` | A Granola note (from its public API) as one document to read into memory |
+| `src/memory/calendar.ts` | Calendar events into memory; a board's fingerprint; which boards to draft or refresh |
+| `src/refresh.ts` | Bringing a drafted board up to date while keeping everything the user did |
+| `scripts/google.ts` | Google sign-in, the sealed grant, reading events |
 | `src/intel/providers/server.ts` | The page's model through the local server (`scripts/serve.ts`) |
 | `src/export.ts` | Converts an engine board into canvas items, keeping memory and gap markers |
 | `app/board.js`, `app/board.css`, `app/index.html` | The freeform canvas (from the prototype, extended) |

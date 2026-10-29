@@ -84,7 +84,7 @@ export function adminPage(rows: TesterRow[], opts: { today: number; perTester: n
   const when = (t: string) => new Date(t).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'UTC' }) + ' UTC';
   const seen = new Set(rows.map(r => r.who));
   const never = opts.invited.filter(n => !seen.has(n));
-  const body = rows.map(r => `<tr><th scope="row">${esc(r.who)}</th><td>${when(r.last)}</td><td>${r.days}</td><td>${r.boards}</td><td>${r.opened}</td><td>${r.float}</td><td>${r.saved}</td><td class="sb ${r.secondBoard.replace(' ', '-')}">${r.secondBoard}</td><td>${r.calls}</td><td>${Math.round(r.tokens / 1000).toLocaleString()}k</td></tr>`).join('');
+  const body = rows.map(r => `<tr><th scope="row">${esc(r.who)}</th><td>${when(r.last)}</td><td>${r.days}</td><td>${r.calendar ? 'yes' : '—'}</td><td>${r.boards}</td><td>${r.drafted}</td><td>${r.opened}</td><td>${r.float}</td><td>${r.saved}</td><td class="sb ${r.secondBoard.replace(' ', '-')}">${r.secondBoard}</td><td>${r.calls}</td><td>${Math.round(r.tokens / 1000).toLocaleString()}k</td></tr>`).join('');
   return `${HEAD('Cueboard · test usage')}
 <style>
 main{max-width:1100px;margin:0 auto;padding:32px 16px}
@@ -103,7 +103,7 @@ tbody tr:last-child th,tbody tr:last-child td{border-bottom:0}
 </style></head><body><main>
 <h1>Test usage</h1>
 <p class="sub muted">Model calls today: ${opts.today} of ${opts.total} for everyone, ${opts.perTester} each. Times in UTC.</p>
-<div class="card">${rows.length ? `<table><thead><tr><th scope="col">Tester</th><th scope="col">Last seen</th><th scope="col">Days used</th><th scope="col">Boards made</th><th scope="col">Boards opened</th><th scope="col">Float opened</th><th scope="col">Memory saves</th><th scope="col">2nd board ≤14 days</th><th scope="col">Model calls</th><th scope="col">Tokens</th></tr></thead><tbody>${body}</tbody></table>` : '<p class="empty muted">Nobody has used it yet.</p>'}</div>
+<div class="card">${rows.length ? `<table><thead><tr><th scope="col">Tester</th><th scope="col">Last seen</th><th scope="col">Days used</th><th scope="col">Calendar</th><th scope="col">Boards made</th><th scope="col">Drafted for them</th><th scope="col">Boards opened</th><th scope="col">Float opened</th><th scope="col">Memory saves</th><th scope="col">2nd board ≤14 days</th><th scope="col">Model calls</th><th scope="col">Tokens</th></tr></thead><tbody>${body}</tbody></table>` : '<p class="empty muted">Nobody has used it yet.</p>'}</div>
 ${never.length ? `<p class="note muted">Invited, not used yet: ${never.map(esc).join(', ')}</p>` : ''}
 <p class="note muted">“2nd board ≤14 days”: whether they made another board within 14 days of their first. That’s the test’s question.</p>
 </main></body></html>`;

@@ -17,7 +17,8 @@
         "scripts/serve.ts",
         "5181",
         "--fake-model",
-        "--fake-granola"
+        "--fake-granola",
+        "--fake-calendar"
       ],
       "port": 5181
     },

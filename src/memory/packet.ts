@@ -1,6 +1,7 @@
 import type { ContextDoc, Packet } from '../types.ts';
 import { ms } from '../text.ts';
 import type { DocKind, Memory } from './types.ts';
+import { unrecordedMeetings } from './calendar.ts';
 
 // A meeting's packet is memory seen from that meeting. Everything is passed through; the engine
 // keeps only what's about the people coming, confirmed, sourced and the user's own to see.
@@ -32,7 +33,7 @@ export function packetFor(memory: Memory, meetingId: string, now: string): Packe
     metrics: memory.metrics,
     disclosures: memory.disclosures,
     amounts: [],
-    touches: memory.touches,
+    touches: [...memory.touches, ...unrecordedMeetings(memory, ms(now))],
     commitments: memory.commitments,
     objections: memory.objections,
     questions: [],
@@ -41,5 +42,5 @@ export function packetFor(memory: Memory, meetingId: string, now: string): Packe
 
 // The meetings still ahead, soonest first, for picking which one to prepare.
 export function upcoming(memory: Memory, now: string) {
-  return memory.meetings.filter(m => ms(m.startsAt) >= ms(now) - 3_600_000).sort((a, b) => ms(a.startsAt) - ms(b.startsAt));
+  return memory.meetings.filter(m => !m.cancelled && ms(m.startsAt) >= ms(now) - 3_600_000).sort((a, b) => ms(a.startsAt) - ms(b.startsAt));
 }

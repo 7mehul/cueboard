@@ -657,3 +657,11 @@ body.rotating,body.rotating *{cursor:grabbing!important}
 .gr-setup{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:12px;line-height:1.5}
 .gr-setup code{display:block;margin-top:8px;font:500 13px var(--f-mono);background:var(--hover);padding:8px 12px;border-radius:10px;white-space:pre-wrap;word-break:break-all}
 .td-gr{align-self:flex-start;height:38px;background:var(--hover)}
+.td-cal .btn.primary{align-self:flex-start;height:40px;padding:0 18px}
+.td-cal-who{display:block;color:var(--ink);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.td-cal-act{display:flex;gap:8px;flex-wrap:wrap}
+.td-cal-act .btn{height:34px;padding:0 14px;background:var(--hover)}
+.td-cal-act .btn:hover{background:var(--press)}
+.td-setup summary{cursor:pointer;font-size:14.5px;font-weight:600;color:var(--accent)}
+.td-setup .gr-setup{margin-top:12px;font-size:14px}
+.td-meta .td-muted{font-size:13px}

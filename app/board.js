@@ -313,10 +313,20 @@ function normalizeBoard(raw) {
     view: v && isFinite(num(v.x)) && isFinite(num(v.y)) && isFinite(num(v.z)) ? { x: num(v.x), y: num(v.y), z: clamp(num(v.z), 0.15, 3) } : null,
     ...(typeof raw.meetingId === 'string' && /^[\w-]{1,80}$/.test(raw.meetingId) ? { meetingId: raw.meetingId } : {}),
     ...(raw.settle === true ? { settle: true } : {}),
+    ...(raw.reflow === true ? { reflow: true } : {}),
+    ...(raw.gen && typeof raw.gen === 'object' && Array.isArray(raw.gen.els) ? { gen: normGen(raw.gen) } : {}),
+  };
+}
+// What the engine drafted last time, kept so a refresh can tell its cards from the user's.
+function normGen(g) {
+  return {
+    inputs: typeof g.inputs === 'string' ? g.inputs.slice(0, 64) : '', at: isFinite(num(g.at)) ? num(g.at) : 0,
+    mode: g.mode === 'model' ? 'model' : 'rules', title: str(g.title, 120), auto: !!g.auto,
+    els: g.els.slice(0, 400).map(e => normalizeEl(e, true)).filter(Boolean),
   };
 }
 function serialize(b) {
-  return { title: b.title, updatedAt: b.updatedAt, example: !!b.example, view: b.view || null, elements: b.elements, links: b.links || [], ...(b.meetingId ? { meetingId: b.meetingId } : {}), ...(b.settle ? { settle: true } : {}) };
+  return { title: b.title, updatedAt: b.updatedAt, example: !!b.example, view: b.view || null, elements: b.elements, links: b.links || [], ...(b.meetingId ? { meetingId: b.meetingId } : {}), ...(b.settle ? { settle: true } : {}), ...(b.reflow ? { reflow: true } : {}), ...(b.gen ? { gen: b.gen } : {}) };
 }
 
 // A board the engine drew, as a starting arrangement the user then owns.
@@ -1568,7 +1578,9 @@ function placeNew(list) {
 }
 // The engine placed items using estimated heights. Once they're drawn, restack each column
 // with real heights so nothing overlaps and gaps stay even. Runs once, before the user touches it.
-function settle() {
+// pushOnly: only move things down out of the way, never up; used after a refresh, where the
+// user's arrangement stays as they left it.
+function settle(pushOnly) {
   const items = els().map(e => ({ e, y0: e.y, s: sizeOf(e) })).sort((a, b) => a.y0 - b.y0 || a.e.x - b.e.x);
   const done = [];
   for (const it of items) {
@@ -1576,7 +1588,8 @@ function settle() {
     if (above.length) {
       const gap = it.e.type === 'text' ? 6 : GAP;
       const prev = above.reduce((a, d) => (d.e.y + d.s.h > a.e.y + a.s.h ? d : a));
-      it.e.y = Math.round(prev.e.y + prev.s.h + (prev.e.type === 'text' && it.e.type !== 'text' ? 28 : gap));
+      const want = Math.round(prev.e.y + prev.s.h + (prev.e.type === 'text' && it.e.type !== 'text' ? 28 : gap));
+      if (!pushOnly || it.e.y < want) it.e.y = want;
     }
     const n = nodes.get(it.e.id); if (n) n.style.top = it.e.y + 'px';
     done.push(it);
@@ -1680,6 +1693,9 @@ function switchBoard(id) {
   renderAll(); updateChrome(); updateUndo(); renderChat(); updateCtx();
   const b = board();
   if (S.booted && b.meetingId) track('board_opened');
+  if (b.reflow) requestAnimationFrame(() => { if (S.boardId !== b.id || !b.reflow) return; delete b.reflow; settle(true); scheduleSave(b.id); });
+  // Brought up to date while you were elsewhere: say what changed, once.
+  if (b.news) { toast(b.news); delete b.news; }
   if (b.settle) {
     const run = () => { if (S.boardId !== b.id || !b.settle) return; delete b.settle; settle(); if (b.autoFit && !S.viewTouched) fitAll(false); if (!b.example) scheduleSave(b.id); };
     requestAnimationFrame(run);
@@ -1980,7 +1996,7 @@ async function loadMemory() {
   return Mem.data;
 }
 async function saveMemory() {
-  queueToday();
+  queueToday(); queuePrep();
   if (Store.mode === 'db' && Store.col) { try { await Store.col.doc('memory').set(JSON.parse(JSON.stringify(Mem.data))); return true; } catch (_) { } }
   try { localStorage.setItem(MEM_KEY, JSON.stringify(Mem.data)); return true; }
   catch (_) { toast('Memory is full in this browser, so this wasn’t saved'); return false; }
@@ -2045,6 +2061,7 @@ function pasteApart(ta, after) {
   });
 }
 function closeSheet() { sheet.hidden = true; sheet.textContent = ''; R = {}; }
+const sheetOpen = () => !sheet.hidden;
 function sheetFrame(title, sub, body, foot) {
   sheet.textContent = '';
   sheet.append(h('div', { class: 'sh-card' },
@@ -2257,19 +2274,34 @@ function sheetReview() {
       h('button', { class: 'btn primary', type: 'button', onclick: save }, R.mode === 'prep' ? 'Save and make the board' : 'Save to memory')]);
 }
 
-// opts.open false: make it and keep it for later (Today shows it as ready).
+// opts.open false: make it and keep it for later (Today shows it as ready). opts.auto: drafted
+// without anyone asking. A meeting that already has a drafted board gets that board brought up
+// to date instead of a second one.
 async function boardFromMemory(meetingId, added, opts) {
-  const open = !opts || opts.open !== false;
+  opts = opts || {};
+  const open = opts.open !== false;
   await (Mem.ready || (Mem.ready = loadMemory()));
   const llm = await memoryModel();
   if (llm && open) toast('Reading the meeting…');
+  const inputs = Engine.meetingInputs ? Engine.meetingInputs(Mem.data, meetingId, Date.now()) : '';
   let r = null;
   try { r = await Engine.boardForMemory(Mem.data, meetingId, new Date().toISOString(), llm); } catch (_) { r = null; }
-  if (!r) { toast('That meeting isn’t in memory'); return null; }
+  if (!r) { if (!opts.auto) toast('That meeting isn’t in memory'); return null; }
+  const prior = boardFor(meetingId);
+  if (prior && prior.gen && Engine.mergeRefresh) {
+    const res = refreshBoard(prior, r, inputs, !!opts.auto);
+    track('board_refreshed', { kind: opts.auto ? 'auto' : 'asked', n: res.updated + res.added + res.removed });
+    if (!open) return prior.id;
+    closeToday();
+    if (S.boardId !== prior.id) switchBoard(prior.id);
+    toast((added ? `Saved ${added} things to memory. ` : '') + refreshNote(res));
+    return prior.id;
+  }
   const b = fromEngine(r.board, rid('b-'), { meetingId });
+  b.gen = genOf(b, r, inputs, !!opts.auto);
   S.boards[b.id] = b;
   scheduleSave(b.id);
-  track('board_made', { kind: r.mode === 'model' ? 'model' : 'rules' });
+  track(opts.auto ? 'board_drafted' : 'board_made', { kind: r.mode === 'model' ? 'model' : 'rules' });
   if (!open) return b.id;
   const cur = board();
   if (cur && cur.id !== b.id && !cur.example && !cur.elements.length) { delete S.boards[cur.id]; dirty.delete(cur.id); Store.remove(cur.id); }
@@ -2281,6 +2313,36 @@ async function boardFromMemory(meetingId, added, opts) {
   return b.id;
 }
 function updateNotesBtn() { const b = board(), btn = $('#b-notes'); if (btn) btn.hidden = !(b && b.meetingId); }
+
+const genOf = (b, r, inputs, auto) => ({ inputs: inputs || '', at: Date.now(), mode: r.mode === 'model' ? 'model' : 'rules', title: b.title, auto, els: JSON.parse(JSON.stringify(b.elements)) });
+
+// New content for the cards still as drafted; everything the user touched stays theirs.
+function refreshBoard(b, r, inputs, auto) {
+  const next = fromEngine(r.board, b.id, {});
+  const res = Engine.mergeRefresh(b.elements, b.gen.els, next.elements);
+  const here = S.boardId === b.id;
+  if (here) { blurField(); pushUndo(); }
+  b.elements = res.elements;
+  const ids = new Set(b.elements.map(e => e.id));
+  b.links = (b.links || []).filter(l => (!l.from.id || ids.has(l.from.id)) && (!l.to.id || ids.has(l.to.id)));
+  if (b.title === b.gen.title) b.title = next.title;
+  b.gen = genOf(next, r, inputs, auto || b.gen.auto);
+  b.updatedAt = Date.now();
+  if (res.updated || res.added) b.reflow = true;
+  if (!here && (res.updated || res.added || res.removed)) b.news = `Updated ${hm(new Date())} with what’s new. ` + refreshNote(res).replace(/^Brought up to date: /, '');
+  scheduleSave(b.id);
+  if (here) {
+    renderAll(); updateChrome();
+    if (b.reflow) requestAnimationFrame(() => { if (S.boardId !== b.id || !b.reflow) return; delete b.reflow; settle(true); scheduleSave(b.id); });
+  }
+  return res;
+}
+function refreshNote(res) {
+  const n = (k, one, many) => (k ? `${k} ${k === 1 ? one : many}` : '');
+  const parts = [n(res.updated, 'card updated', 'cards updated'), n(res.added, 'new card', 'new cards'), n(res.removed, 'card no longer relevant', 'cards no longer relevant')].filter(Boolean);
+  if (!parts.length) return 'The board was already up to date.';
+  return `Brought up to date: ${parts.join(', ')}.${res.kept ? ' Your edits are kept.' : ''}`;
+}
 
 /* ================= Granola import ================= */
 // Notes people already have in Granola come into memory the same way a paste does: each note is
@@ -2395,6 +2457,115 @@ async function readGranola(ids) {
   sheetReading(llm);
 }
 
+/* ================= calendar ================= */
+// Meetings arrive from Google Calendar by themselves: read when Cueboard opens, every ten minutes
+// while it's open, and when you come back to the tab. Every meeting today and tomorrow then gets
+// its board drafted without anyone asking, and a board whose meeting or memory changed is brought
+// up to date. The server holds no one's calendar: the grant lives in this browser's cookie.
+const CAL = { status: null, busy: false, last: 0, error: null, email: null };
+async function calendarStatus() {
+  try { const r = await fetch('/api/calendar', grHeaders); CAL.status = r.ok ? await r.json() : null; } catch (_) { CAL.status = null; }
+  queueToday();
+  return CAL.status;
+}
+async function syncCalendar(force) {
+  if (CAL.busy || !CAL.status || !CAL.status.connected || !Engine || !Engine.syncCalendar) return;
+  if (!force && Date.now() - CAL.last < 4 * 60000) return;
+  CAL.busy = true; queueToday();
+  try {
+    const r = await fetch('/api/calendar/events', grHeaders);
+    const b = await r.json().catch(() => null);
+    if (!r.ok || !b || !Array.isArray(b.events)) {
+      const e = b && b.error;
+      if (r.status === 401) CAL.status.connected = false;
+      CAL.error = (e && e.message) || 'Couldn’t reach your calendar.';
+      return;
+    }
+    await (Mem.ready || (Mem.ready = loadMemory()));
+    if (!Mem.data) return;
+    const s = Engine.syncCalendar(Mem.data, b.events, { now: new Date().toISOString(), from: b.from, to: b.to, selfEmail: b.email });
+    if (b.email) CAL.email = b.email;
+    if (JSON.stringify(s.memory) !== JSON.stringify(Mem.data)) { Mem.data = s.memory; await saveMemory(); }
+    CAL.last = Date.now(); CAL.error = null;
+  } catch (_) { CAL.error = 'Couldn’t reach your calendar.'; }
+  finally { CAL.busy = false; queueToday(); queuePrep(); }
+}
+async function disconnectCalendar() {
+  try { await fetch('/api/calendar/disconnect', { method: 'POST', headers: { 'x-cueboard': '1' } }); } catch (_) { }
+  if (CAL.status) CAL.status.connected = false;
+  CAL.email = null; CAL.last = 0;
+  toast('Calendar disconnected. Meetings already read stay in memory.');
+  queueToday();
+}
+async function calendarBoot() {
+  // Back from Google's sign-in: the answer is in the address, which is tidied straight away.
+  const q = new URLSearchParams(location.search), said = q.get('calendar');
+  if (said) { q.delete('calendar'); history.replaceState(null, '', location.pathname + (q.toString() ? '?' + q : '') + location.hash); }
+  const st = await calendarStatus();
+  if (said === 'connected' && st && st.connected) {
+    track('calendar_connected');
+    await (Mem.ready || (Mem.ready = loadMemory()));
+    openToday();
+    toast('Calendar connected. Drafting boards for today and tomorrow…');
+  } else if (said === 'denied') toast('Google didn’t give Cueboard your calendar. Connect again and leave the calendar box ticked.');
+  else if (said === 'failed') toast('Connecting your calendar didn’t work. Try again in a moment.');
+  if (st && st.connected) await syncCalendar(true);
+  else queuePrep();
+  setInterval(() => syncCalendar(false), 10 * 60000);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { syncCalendar(false); queuePrep(); } });
+}
+const ago = t => { const m = Math.round((Date.now() - t) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : `${Math.round(m / 60)} h ago`; };
+function calendarCard() {
+  const st = CAL.status;
+  if (!st || (!st.configured && st.hosted)) return null;
+  const pitch = 'Connect Google Calendar and every meeting with someone from outside your company gets its board drafted before you ask. Cueboard only reads it.';
+  if (!st.configured) {
+    return h('div', { class: 'td-owed td-cal' }, h('h2', { text: 'Your meetings, by themselves' }), h('p', { class: 'td-muted', text: pitch }),
+      h('details', { class: 'td-setup' }, h('summary', { text: 'Set it up on this machine' }),
+        h('ol', { class: 'gr-setup' },
+          h('li', {}, 'In Google Cloud, create an OAuth client (type: Web application) with this redirect address:', h('code', { text: `${location.origin}/oauth/google/callback` })),
+          h('li', {}, 'Turn on the Google Calendar API, and add your Google account as a test user.'),
+          h('li', {}, 'Start Cueboard again with the client’s ID and secret set:', h('code', { text: 'GOOGLE_CLIENT_ID=… GOOGLE_CLIENT_SECRET=… node scripts/serve.ts' })))));
+  }
+  if (!st.connected) {
+    return h('div', { class: 'td-owed td-cal' }, h('h2', { text: 'Your meetings, by themselves' }),
+      h('p', { class: 'td-muted', text: CAL.error || pitch }),
+      h('button', { class: 'btn primary', type: 'button', onclick: () => location.assign('/oauth/google/start') }, ic('calendar'), CAL.error ? 'Connect again' : 'Connect Google Calendar'));
+  }
+  const line = CAL.busy ? 'Reading your calendar…' : CAL.error ? CAL.error : CAL.last ? `Synced ${ago(CAL.last)}` : 'Connected';
+  return h('div', { class: 'td-owed td-cal' }, h('h2', { text: 'Google Calendar' }),
+    h('p', { class: 'td-muted' }, CAL.email ? h('span', { class: 'td-cal-who', text: CAL.email }) : null, line),
+    h('div', { class: 'td-cal-act' },
+      h('button', { class: 'btn', type: 'button', disabled: CAL.busy, onclick: () => syncCalendar(true) }, 'Sync now'),
+      h('button', { class: 'btn', type: 'button', onclick: disconnectCalendar }, 'Disconnect')));
+}
+
+// Drafting without being asked: one board at a time, soonest meeting first. A board that's on
+// screen isn't changed under the person looking at it; it offers the update instead.
+const AP = { running: false, t: 0, skip: new Set(), offered: new Set() };
+function queuePrep() { clearTimeout(AP.t); AP.t = setTimeout(autoPrep, 1200); }
+async function autoPrep() {
+  if (AP.running || !Engine || !Engine.prepPlan || !Mem.data) return;
+  AP.running = true;
+  try {
+    for (let guard = 0; guard < 16; guard++) {
+      const states = Object.values(S.boards).filter(b => b.meetingId).map(b => ({ meetingId: b.meetingId, inputs: b.gen ? b.gen.inputs : undefined, refreshable: !!b.gen }));
+      const plan = Engine.prepPlan(Mem.data, states, new Date().toISOString());
+      const here = !TD.open && !sheetOpen() && board() && board().meetingId;
+      const id = plan.make.find(x => !AP.skip.has(x)) || plan.refresh.find(x => !AP.skip.has(x) && x !== here);
+      if (here && plan.refresh.includes(here)) {
+        const key = here + ':' + (board().gen ? board().gen.inputs : '');
+        if (!AP.offered.has(key)) { AP.offered.add(key); toast('There’s new information for this board.', { label: 'Update it', fn: () => boardFromMemory(here, 0, { open: true }) }); }
+      }
+      if (!id) break;
+      TD.busy.add(id); queueToday();
+      const bid = await boardFromMemory(id, 0, { open: false, auto: true });
+      TD.busy.delete(id); queueToday();
+      if (!bid) AP.skip.add(id);
+    }
+  } finally { AP.running = false; queueToday(); }
+}
+
 /* ================= today ================= */
 // The front page when meetings are coming up: each one with whether its board is ready, what
 // changed since you last spoke and what's owed, and one box to paste a new meeting into.
@@ -2404,7 +2575,7 @@ const TD = { open: false, busy: new Set(), draft: '', t: 0, iv: 0 };
 const NUMBERS = ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine'];
 const STATUS_CHIP = {
   ready: ['Board ready', 'ok'], not_prepped: ['Not prepped yet', 'plain'], needs_notes: ['Needs your notes', 'warn'],
-  add_notes: ['How did it go?', 'warn'], reading: ['Reading the meeting', 'busy'],
+  add_notes: ['How did it go?', 'warn'], reading: ['Preparing the board', 'busy'],
 };
 const madeFor = () => Object.values(S.boards).filter(b => b.meetingId).map(b => b.meetingId);
 const boardFor = id => Object.values(S.boards).filter(b => b.meetingId === id).sort((a, b) => b.updatedAt - a.updatedAt)[0];
@@ -2455,7 +2626,9 @@ function renderToday() {
     h('h1', { class: 'td-h1', text: todays ? `${NUMBERS[todays] || todays} ${todays === 1 ? 'meeting' : 'meetings'} today` : 'Nothing on today' }));
   if (!model.sections.length) {
     list.append(h('div', { class: 'td-empty' },
-      h('p', { text: 'No meetings in memory yet. Paste an invite, and anything else you have about it, and the board drafts itself.' })));
+      h('p', { text: CAL.status && CAL.status.connected
+        ? (CAL.busy ? 'Reading your calendar…' : 'No meetings with people from outside your company in the next two weeks.')
+        : 'No meetings in memory yet. Connect your calendar, or paste an invite and anything else you have about it, and the board drafts itself.' })));
   }
   for (const sec of model.sections) {
     if (sec.key !== 'today') list.append(h('h2', { class: 'td-sec', text: sec.label }));
@@ -2493,7 +2666,7 @@ function renderToday() {
   const gr = granolaOffered() ? h('div', { class: 'td-owed' }, h('h2', { text: 'Notes you already have' }),
     h('p', { class: 'td-muted', text: 'Bring in past meetings from Granola, so follow-ups know where you left off.' }),
     h('button', { class: 'btn td-gr', type: 'button', onclick: openGranolaImport }, ic('note'), 'Import from Granola')) : null;
-  todayEl.replaceChildren(top, h('div', { class: 'td-main' }, list, h('aside', { class: 'td-side' }, paste, gr, owed)));
+  todayEl.replaceChildren(top, h('div', { class: 'td-main' }, list, h('aside', { class: 'td-side' }, calendarCard(), paste, gr, owed)));
 }
 
 function meetingCard(m, key, now) {
@@ -2516,11 +2689,15 @@ function meetingCard(m, key, now) {
   } else if (status === 'ready') {
     act.push(h('button', { class: 'btn primary', type: 'button', onclick: () => openFromToday(m.id) }, 'Open board'),
       h('button', { class: 'btn', type: 'button', onclick: () => openFromToday(m.id, true) }, ic('popout'), 'Float beside the call'));
+    if (m.notesFor) act.push(h('button', { class: 'btn', type: 'button', onclick: () => openSheet('notes', { meetingId: m.notesFor }) }, 'Add last call’s notes'));
   } else act.push(h('button', { class: 'btn primary', type: 'button', onclick: () => makeFromToday(m.id) }, ic('spark'), 'Make the board'));
-  const note = status === 'needs_notes' ? h('p', { class: 'td-muted', text: 'Notes from your last call with them aren’t in yet, so the board won’t know where you left off.' }) : null;
+  if (m.joinUrl && key === 'today' && status !== 'add_notes') act.push(h('a', { class: 'btn', href: m.joinUrl, target: '_blank', rel: 'noopener noreferrer' }, 'Join the call'));
+  const note = m.notesFor && status !== 'add_notes' ? h('p', { class: 'td-muted', text: 'Notes from your last call with them aren’t in yet, so the board won’t know where you left off.' }) : null;
+  const made = has && status === 'ready' ? boardFor(m.id).gen : null;
   return h('article', { class: 'td-card' },
     h('div', { class: 'td-meta' }, h('span', { class: 'td-time', text: when }), h('span', { class: 'td-tag ' + tone, text: chip }),
-      h('span', { class: 'td-muted', text: m.stage === 'followup' ? `Follow-up · meeting ${m.meetingNo}` : 'First meeting' })),
+      h('span', { class: 'td-muted', text: m.stage === 'followup' ? `Follow-up · meeting ${m.meetingNo}` : 'First meeting' }),
+      made && made.auto ? h('span', { class: 'td-muted', text: `Drafted for you · ${hm(new Date(made.at))}` }) : null),
     h('h3', { class: 'td-title', text: m.title }),
     info.length ? h('div', { class: 'td-info' }, info) : null,
     note,
@@ -3735,6 +3912,7 @@ async function boot() {
   const saved = await Store.ready;
   Mem.ready = Mem.ready || loadMemory();
   granolaStatus().then(() => track('app_opened'));
+  calendarBoot();
   Mem.ready.then(m => {
     if (!m || S.touched || !Engine || !Engine.todayModel) return;
     const t = Engine.todayModel(m, new Date().toISOString(), madeFor());

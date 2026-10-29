@@ -1,0 +1,73 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mergeRefresh } from '../src/refresh.ts';
+import type { El } from '../src/refresh.ts';
+
+const card = (id: string, lines: string[], at: Partial<El> = {}): El => ({ id, type: 'card', x: 0, y: 0, w: 300, h: 100, color: 'mint', tag: 'Key notes', title: 'Run of show', lines: lines.map(text => ({ text })), ...at });
+const stat = (id: string, value: string, at: Partial<El> = {}): El => ({ id, type: 'stat', x: 400, y: 0, w: 200, h: 100, label: 'MRR', value, note: '', ...at });
+
+test('cards still as drafted take the new content where they sit; edited ones stay yours', () => {
+  const drafted = [card('keynotes', ['Goal: a second meeting']), stat('number-mrr', '$33k'), card('person-maya', ['Partner at Larkspur'], { x: 0, y: 200 })];
+  const current = [
+    { ...drafted[0], x: 640, y: 40, color: 'sky' },                                 // moved and recoloured, not edited
+    stat('number-mrr', '$34k (my latest)'),                                           // edited
+    drafted[2],
+  ];
+  const next = [card('keynotes', ['Goal: term sheet by Friday']), stat('number-mrr', '$38.5k'), card('person-maya', ['Partner at Larkspur'], { x: 0, y: 200 })];
+  const r = mergeRefresh(current, drafted, next);
+  const by = new Map(r.elements.map(e => [e.id, e]));
+  assert.deepEqual(by.get('keynotes')!.lines, [{ text: 'Goal: term sheet by Friday' }], 'new content');
+  assert.deepEqual([by.get('keynotes')!.x, by.get('keynotes')!.y, by.get('keynotes')!.color], [640, 40, 'sky'], 'where you put it, in your colour');
+  assert.equal(by.get('number-mrr')!.value, '$34k (my latest)', 'your edit wins');
+  assert.deepEqual([r.updated, r.kept, r.added, r.removed], [1, 1, 0, 0]);
+});
+
+test('your own cards stay, deleted ones stay deleted, and the engine’s leftovers go unless you edited them', () => {
+  const drafted = [card('keynotes', ['a']), card('note-zoom', ['Isn’t this a Zoom feature?']), card('note-repeat', ['Don’t pitch market size']), stat('number-mrr', '$33k')];
+  const mine = card('e-mine', ['My own reminder'], { x: 900 });
+  const current = [drafted[0], card('note-repeat', ['Don’t pitch market size (she knows it)']), stat('number-mrr', '$33k'), mine];  // note-zoom deleted
+  const next = [card('keynotes', ['a']), card('note-zoom', ['Isn’t this a Zoom feature?'])];                                        // engine dropped both notes and the stat
+  const r = mergeRefresh(current, drafted, next);
+  assert.deepEqual(r.elements.map(e => e.id), ['keynotes', 'note-repeat', 'e-mine'], 'deleted stays deleted; the untouched stat goes; edited note and your card stay');
+  assert.deepEqual([r.removed, r.kept], [1, 1]);
+});
+
+test('new cards are added clear of what’s there', () => {
+  const drafted = [card('keynotes', ['a'], { x: 0, y: 0, w: 300, h: 200 })];
+  const r = mergeRefresh(drafted, drafted, [drafted[0], card('note-new', ['They asked about SOC 2'], { x: 100, y: 50, w: 300, h: 100 })]);
+  const added = r.elements.find(e => e.id === 'note-new')!;
+  assert.equal(r.added, 1);
+  assert.ok(added.y >= 224, `below the run of show, at ${added.y}`);
+  const free = mergeRefresh(drafted, drafted, [drafted[0], card('note-free', ['x'], { x: 400, y: 0 })]).elements.find(e => e.id === 'note-free')!;
+  assert.deepEqual([free.x, free.y], [400, 0], 'where the engine put it, when that’s free');
+});
+
+test('inside a card: the Goal you filled in stays, “Where we left off” still updates', () => {
+  const ros = (lines: object[]): El => ({ id: 'keynotes', type: 'card', x: 0, y: 0, w: 300, h: 100, color: 'mint', tag: 'Key notes', title: 'Run of show', lines });
+  const drafted = ros([{ label: 'Where we left off', text: 'Call with Maya. No notes from it yet.' }, { label: 'Goal', text: '[what do you want out of this meeting?]', gap: true }, { label: 'Ask', text: '[the next step to ask for]', gap: true }]);
+  const mine = ros([{ label: 'Where we left off', text: 'Call with Maya. No notes from it yet.' }, { label: 'Goal', text: 'Get to a term sheet' }]);   // filled Goal, deleted Ask
+  const next = ros([{ label: 'Where we left off', text: 'She wants a cohort table before going to partners' }, { label: 'Goal', text: '[what do you want out of this meeting?]', gap: true }, { label: 'Ask', text: '[the next step to ask for]', gap: true }, { label: 'Open with', text: 'Send the cohort table' }]);
+  const r = mergeRefresh([mine], [drafted], [next]);
+  assert.deepEqual(r.elements[0].lines, [
+    { label: 'Where we left off', text: 'She wants a cohort table before going to partners' },
+    { label: 'Goal', text: 'Get to a term sheet' },
+    { label: 'Open with', text: 'Send the cohort table' },
+  ], 'new left-off, your goal, no Ask (you deleted it), and the new line');
+  assert.deepEqual([r.updated, r.kept], [1, 1]);
+});
+
+test('lines you add to a card stay; ticked questions stay ticked', () => {
+  const person = (lines: object[]): El => ({ id: 'person-maya', type: 'person', x: 0, y: 0, w: 280, h: 100, color: 'sky', name: 'Maya Chen', lines });
+  const r = mergeRefresh(
+    [person([{ text: '[look up Maya Chen’s role]', gap: true }, { text: 'Met her at SaaStr' }])],
+    [person([{ text: '[look up Maya Chen’s role]', gap: true }])],
+    [person([{ text: 'Did 3 seed deals in workflow tools this year' }, { text: 'Asked twice about churn in small teams' }])]);
+  assert.deepEqual((r.elements[0].lines as { text: string }[]).map(l => l.text), ['Did 3 seed deals in workflow tools this year', 'Asked twice about churn in small teams', 'Met her at SaaStr']);
+
+  const list = (items: object[]): El => ({ id: 'questions', type: 'list', x: 0, y: 0, w: 300, h: 100, title: 'Questions to ask', items });
+  const q = mergeRefresh(
+    [list([{ text: 'Who else decides?', done: true }, { text: 'What’s the timeline?', done: false }])],
+    [list([{ text: 'Who else decides?', done: false }, { text: 'What’s the timeline?', done: false }])],
+    [list([{ text: 'Who else decides?', done: false }, { text: 'What’s the timeline?', done: false }, { text: 'Is the cohort table enough?', done: false }])]);
+  assert.deepEqual((q.elements[0].items as { text: string; done: boolean }[]).map(i => `${i.done ? '✓' : '·'} ${i.text}`), ['✓ Who else decides?', '· What’s the timeline?', '· Is the cohort table enough?']);
+});
