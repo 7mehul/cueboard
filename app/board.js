@@ -1719,7 +1719,8 @@ function switchBoard(id) {
   }
   // A board with no saved view is fitted to the screen, and refitted as it settles until the user moves it.
   S.viewTouched = false;
-  if (b.view) setView(b.view, false); else { fitAll(false); b.autoFit = true; }
+  // A saved view is where the user left it (or the last fit): it stays put.
+  if (b.view) { setView(b.view, false); delete b.autoFit; } else { fitAll(false); b.autoFit = true; }
   setStatus(b.saved ? (Store.mode === 'db' ? 'saved' : Store.mode === 'local' ? 'local' : 'memory') : (b.example ? 'example' : ''));
 }
 function newBoard() {

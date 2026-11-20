@@ -6,6 +6,8 @@ and under each part what you need in it, from the people and their history to th
 questions to ask, the objections they raised and the promises still open. Every line says where
 it came from. During the call, a small window floats over Zoom, Meet or Teams and follows along.
 
+![A board drafted for a renewal check-in. Typing a goal, "Find out why their seats keep falling", redraws the plan, the opener, the ask and the questions around it.](docs/demo.gif)
+
 It works from what you already have: your calendar, your notes from past calls (pasted, or
 imported from Granola), emails and invites. It remembers people, not transcripts, so the second
 meeting with someone knows where the first one left off.
