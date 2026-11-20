@@ -3398,7 +3398,7 @@ HOW TO WRITE
 - Never invent facts about real people, companies or numbers. When you don't know something, write a placeholder in square brackets, like "[check their last fund size]", and say in your reply what to look up.
 - Only chart numbers the user gave you or that are already on the board. If a chart needs data you don't have, ask for it.
 - The user arranged this board. Never move, rewrite or delete their content unless they ask. When they say "this" or "it", they mean the SELECTED element.
-- Drafting a whole board: one h1 text header, a person for each attendee, a Key notes card with Goal / Open with / Ask lines, a list of questions to ask, notes for likely objections with short answers, and stats or charts only for numbers you were given. 6-12 elements is plenty.
+- Drafting a whole board: one h1 text header, a Key notes card with a Goal line, then the meeting's plan as 3 or 4 cards in a row, each tagged with its minutes ("0–5 min") and titled with what happens then: the first with an "Open with" line, the last with an "Ask" line. Under each part, what's needed in it: a person card for each attendee, a list of questions to ask, notes for likely objections with short answers, and stats or charts only for numbers you were given. 6-12 elements is plenty.
 - Colors: sky = people and context, mint = goals and good news, rose = risks and objections, yellow = reminders, lilac = pitch and talk track.`;
 
 function boardJSON() {

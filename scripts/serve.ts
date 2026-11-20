@@ -16,7 +16,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { resolve } from 'node:path';
 import { SCHEMAS } from '../src/intel/schemas.ts';
 import { LLMError } from '../src/intel/llm.ts';
 import type { Found, LLM, Usage as Tokens } from '../src/intel/llm.ts';
@@ -30,7 +31,7 @@ const args = process.argv.slice(2);
 const hosted = args.includes('--hosted');
 const argPort = Number(args.find(a => /^\d+$/.test(a)));
 const port = hosted ? Number(process.env.PORT) || argPort || 10000 : argPort || 5180;
-const dist = new URL('../dist/', import.meta.url);
+const dist = process.env.CUE_DIST ? pathToFileURL(resolve(process.env.CUE_DIST) + '/') : new URL('../dist/', import.meta.url);
 const origins = new Set([`http://localhost:${port}`, `http://127.0.0.1:${port}`]);
 
 // A sign-in saved by `ant auth login` on this machine counts as a key. The SDK finds it itself;

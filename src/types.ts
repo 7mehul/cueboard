@@ -146,6 +146,7 @@ export interface ContextDoc {
 export interface Packet {
   userId: string;
   now: string;
+  timeZone?: string; // the user's IANA zone, for showing dates; UTC when unset
   user?: UserProfile;
   context?: ContextDoc[];
   meeting: {

@@ -2,7 +2,8 @@ import type { Board, Packet, Placement } from './types.ts';
 import { MEMORY_KINDS, PHASE_SLOTS } from './types.ts';
 import { MIN_CONFIDENCE, NEWS_MAX_AGE_DAYS } from './facts.ts';
 import { blockBudget } from './playbooks.ts';
-import { LIMITS, daysBetween, fits, fmtValue, isDate, lineLimit, ms, normalize, titleLimit } from './text.ts';
+import { LIMITS, daysBetween, fits, fmtValue, isDate, lineLimit, ms, normalize, titleLimit, valueText } from './text.ts';
+import { planLength } from './playbooks.ts';
 
 // The rules every board must keep, checked from the packet on their own terms rather than
 // by re-running the engine's code. Used by unit tests, the scale run, and later on model output.
@@ -21,6 +22,7 @@ export function checkBoard(board: Board, p: Packet, opts: { maxBlocks?: number }
   const isMem = (id: string) => MEMORY_KINDS.includes(sources.get(id)?.kind as never);
   const attendees = [...new Set(p.meeting.attendeeIds)].map(id => people.get(id)).filter(x => !!x);
   const resolved = new Set(attendees.filter(a => a.resolved).map(a => a.id));
+  const theirCompanies = new Set(attendees.filter(a => a.resolved).map(a => a.companyId).filter(Boolean));
 
   // ---------- structure ----------
   const ids = board.blocks.map(b => b.id);
@@ -63,6 +65,9 @@ export function checkBoard(board: Board, p: Packet, opts: { maxBlocks?: number }
         if (isDate(f.date) && ms(f.date) > now) add('future_fact', `${ref} is dated ${f.date}`, ref);
         if (f.topic === 'news' && (!isDate(f.date) || daysBetween(f.date, p.meeting.startsAt) > NEWS_MAX_AGE_DAYS)) add('stale_news', `${ref} news from ${f.date}`, ref);
         if (!l.claim) add('fact_not_claim', `${ref} shows a fact without marking it a claim`, ref);
+        if ((f.subject.kind === 'person' && !resolved.has(f.subject.id)) || (f.subject.kind === 'company' && !theirCompanies.has(f.subject.id))) {
+          add('fact_not_in_meeting', `${ref} is about ${f.subject.kind} ${f.subject.id}, who isn’t in this meeting`, ref);
+        }
       }
       const textual = b.kind === 'person' || b.kind === 'keynotes' || b.kind === 'phase' || b.kind === 'questions' || b.kind === 'note' || b.kind === 'timeline';
       if (textual && !l.gap) {
@@ -116,7 +121,7 @@ export function checkBoard(board: Board, p: Packet, opts: { maxBlocks?: number }
     if (!b.minutes || b.minutes.from !== clock || !(b.minutes.to > b.minutes.from)) add('plan_minutes', `${b.id} runs ${b.minutes?.from}–${b.minutes?.to}, after minute ${clock}`, b.id);
     clock = b.minutes?.to ?? clock;
   }
-  if (phases.length && clock !== Math.max(phases.length, Math.round(p.meeting.durationMin))) add('plan_minutes', `The plan ends at minute ${clock} of ${p.meeting.durationMin}`);
+  if (phases.length && clock !== planLength(p.meeting.durationMin, phases.length)) add('plan_minutes', `The plan ends at minute ${clock} of ${p.meeting.durationMin}`);
   if (!phases.at(-1)?.lines.some(l => l.label === 'Ask')) add('missing_ask_line', 'The plan must end on the ask, or a gap for it');
   for (const b of board.blocks) if (b.kind !== 'phase' && b.phase && !(PHASE_SLOTS as unknown[]).includes(b.phase)) add('plan_shape', `${b.id} sits under an unknown part`, b.id);
 
@@ -128,7 +133,7 @@ export function checkBoard(board: Board, p: Packet, opts: { maxBlocks?: number }
       .sort((a, b) => ms(a.date) - ms(b.date));
     const latest = pts.at(-1);
     if (!latest) { add('number_unknown', `${b.id} shows a number with no valid data`, b.id); continue; }
-    const expectV = fmtValue(latest.value, m.prefix, m.suffix);
+    const expectV = valueText(latest.value, m.prefix, m.suffix).value;
     if (b.lines[0]?.text !== expectV) add('number_wrong', `${b.id} shows ${b.lines[0]?.text}, latest is ${expectV}`, b.id);
     const own = !m.owner || m.owner.kind === 'self';
     if (!own) {
@@ -167,10 +172,12 @@ export function checkBoard(board: Board, p: Packet, opts: { maxBlocks?: number }
     if (!m) return null;
     const pts = m.points.filter(pt => isDate(pt.date) && ms(pt.date) <= now && Number.isFinite(pt.value) && okSource(pt.sourceId))
       .sort((a, b) => ms(a.date) - ms(b.date));
-    const shared = p.disclosures.filter(d => d.metricId === m.id && resolved.has(d.personId) && isDate(d.date) && ms(d.date) < start && okSource(d.sourceId))
-      .sort((a, b) => ms(a.date) - ms(b.date) || a.personId.localeCompare(b.personId)).at(-1);
     const latest = pts.at(-1);
-    return latest && shared ? Math.sign(latest.value - shared.value) : null;
+    // The last value shared, as the engine finds it: a real number, and not newer than the data.
+    const shared = p.disclosures.filter(d => d.metricId === m.id && resolved.has(d.personId) && isDate(d.date) && ms(d.date) < start && Number.isFinite(d.value) && okSource(d.sourceId))
+      .sort((a, b) => ms(a.date) - ms(b.date) || a.personId.localeCompare(b.personId)).at(-1);
+    if (!latest || !shared || ms(shared.date) > ms(latest.date)) return null;
+    return Math.sign(latest.value - shared.value);
   };
   for (const b of board.blocks) {
     const said = b.id.startsWith('note:worse:') ? /^(.+) is (up|down)$/.exec(b.title) : null;

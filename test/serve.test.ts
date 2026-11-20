@@ -2,17 +2,25 @@ import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
-import { connect } from 'node:net';
+import { connect, createServer } from 'node:net';
 import { randomBytes } from 'node:crypto';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 // The server as attackers would meet it: real processes on spare ports, raw requests where a
 // browser or fetch would tidy the request up first. Each case was a crash or a leak once.
 
 const servers: ChildProcess[] = [];
-after(() => { for (const s of servers) s.kill(); });
+// Each server builds the app into a folder of its own, so a watcher rebuilding dist/ can't collide.
+const DIST = mkdtempSync(join(tmpdir(), 'cueboard-test-'));
+after(() => { for (const s of servers) s.kill(); rmSync(DIST, { recursive: true, force: true }); });
+
+// A port the system says is free.
+const freePort = () => new Promise<number>(ok => { const s = createServer(); s.listen(0, '127.0.0.1', () => { const p = (s.address() as { port: number }).port; s.close(() => ok(p)); }); });
 
 async function start(port: number, args: string[], env: Record<string, string> = {}) {
-  const p = spawn(process.execPath, ['scripts/serve.ts', String(port), '--fake-model', '--no-watch', ...args], { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const p = spawn(process.execPath, ['scripts/serve.ts', String(port), '--fake-model', '--no-watch', ...args], { env: { ...process.env, CUE_DIST: DIST, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
   servers.push(p);
   await new Promise<void>((ok, no) => {
     const t = setTimeout(() => no(new Error('server didn’t start')), 30_000);
@@ -36,7 +44,7 @@ function raw(port: number, text: string, { hangUp = false } = {}): Promise<strin
 const get = (port: number, path: string, headers = '') => raw(port, `GET ${path} HTTP/1.1\r\nHost: localhost:${port}\r\n${headers}Connection: close\r\n\r\n`);
 const alive = async (port: number) => (await get(port, '/healthz-or-page')).length > 0 && (await fetch(`http://localhost:${port}/`)).status === 200;
 
-const LOCAL = 5391 + Math.floor(Math.random() * 50), HOSTED = LOCAL + 100;
+const LOCAL = await freePort(), HOSTED = await freePort();
 const CODE = 'tester-' + randomBytes(9).toString('base64url');
 
 test('local server: nothing on disk but the app, and bad requests are answered, not fatal', async () => {

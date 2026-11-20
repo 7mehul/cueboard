@@ -1,5 +1,5 @@
 import type { Block, Board, Line, Packet, Source } from './types.ts';
-import { isDate, shortDate } from './text.ts';
+import { isDate, shortDate, withZone } from './text.ts';
 
 // Turn an engine board into items for the freeform canvas. This is only the starting
 // arrangement: once it's on the canvas every item belongs to the user to move, resize,
@@ -59,6 +59,9 @@ type Cites = (ids: string[]) => Cite[] | undefined;
 
 // With the packet, every line keeps the sources it came from, so the canvas can show them.
 export function toCanvas(board: Board, packet?: Packet): CanvasBoard {
+  return withZone(packet?.timeZone, () => canvasOf(board, packet));
+}
+function canvasOf(board: Board, packet?: Packet): CanvasBoard {
   const byId = new Map((packet?.sources ?? []).map(s => [s.id, s]));
   const cites: Cites = ids => {
     const out = [...new Set(ids)].map(id => byId.get(id)).filter((s): s is Source => !!s).slice(0, 3).map(citeOf);

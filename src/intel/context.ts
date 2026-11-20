@@ -1,5 +1,5 @@
 import type { Ctx } from '../facts.ts';
-import { validSources } from '../facts.ts';
+import { inMeeting, validSources } from '../facts.ts';
 import type { NumberInfo } from '../compose.ts';
 import { fmtValue, isDate, longDate, ms, shortDate } from '../text.ts';
 
@@ -17,7 +17,7 @@ export function meetingContext(ctx: Ctx, infos: NumberInfo[]): string {
   out.push(u ? `${u.role} at ${u.company}${u.objectives?.length ? `. Working toward: ${u.objectives.join('; ')}` : ''}` : `Works at ${p.self.companyName} (role not given)`);
 
   out.push('', 'MEETING');
-  out.push(`"${p.meeting.title}", ${longDate(p.meeting.startsAt)}, ${p.meeting.durationMin} min.`);
+  out.push(`"${p.meeting.title}", ${longDate(p.meeting.startsAt)}${p.meeting.durationMin > 0 ? `, ${p.meeting.durationMin} min` : ''}.`);
   out.push(fr.stage === 'first' ? 'No earlier meetings with these people on record.' : `Meeting ${fr.priorMeetings.length + 1} with them.`);
   if (p.meeting.type) out.push(`The user marked it as: ${p.meeting.type}.`);
   if (p.meeting.goal) out.push(`The user's stated goal: "${p.meeting.goal}".`);
@@ -32,7 +32,7 @@ export function meetingContext(ctx: Ctx, infos: NumberInfo[]): string {
       out.push(`  [${f.id}] ${f.topic}: ${clip(f.text, 160)}${f.date ? ` (${shortDate(f.date)})` : ''}`);
     }
   }
-  const theirCompanies = new Set(fr.attendees.map(a => a.companyId).filter(Boolean));
+  const theirCompanies = new Set(fr.attendees.filter(a => a.resolved).map(a => a.companyId).filter(Boolean));
   const companyFacts = ctx.facts.filter(f => f.subject.kind === 'company' && theirCompanies.has(f.subject.id));
   if (companyFacts.length) {
     out.push('', 'THEIR COMPANY');
@@ -86,7 +86,7 @@ export function candidates(ctx: Ctx, infos: NumberInfo[]): Candidate[] {
   const out: Candidate[] = [];
   for (const a of fr.attendees) if (a.resolved) out.push({ id: `p:${a.id}`, text: `person: ${a.name}` });
   for (const f of ctx.facts) {
-    if (f.subject.kind === 'person' && !fr.resolvedIds.has(f.subject.id)) continue;
+    if (!inMeeting(ctx, f)) continue;
     const about = f.subject.kind === 'person' ? names.get(f.subject.id) : f.subject.kind === 'company' ? p.companies.find(c => c.id === f.subject.id)?.name : 'the user';
     out.push({ id: f.id, text: `${f.topic} about ${about}: ${clip(f.text, 140)}` });
   }

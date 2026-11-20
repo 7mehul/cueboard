@@ -65,6 +65,11 @@ const cases: [string, () => Packet, (b: Board, p: Packet) => void][] = [
   ['layout_missing', danaFirst, b => { b.canvas.pop(); }],
   ['rail_wrong', danaFirst, b => { b.rail.pop(); }],
   ['gaps_list_wrong', danaFirst, b => { b.gaps.push('[something else]'); }],
+  ['fact_not_in_meeting', danaFirst, (b, p) => {
+    p.companies.push({ id: 'c-other', name: 'Ridgeway' });
+    p.facts.push({ id: 'f-other', subject: { kind: 'company', id: 'c-other' }, topic: 'company', text: 'Ridgeway runs 40 depots', sourceIds: ['s-team'], confidence: 0.9 });
+    block(b, 'person:p-dana').lines.push({ text: 'Ridgeway runs 40 depots', sourceIds: ['s-team'], factIds: ['f-other'], claim: true });
+  }],
   ['plan_shape', danaFirst, b => { b.blocks = b.blocks.filter(x => x.id !== 'phase:open'); b.canvas = b.canvas.filter(c => c.id !== 'phase:open'); b.rail = b.rail.filter(id => id !== 'phase:open'); }],
   ['plan_minutes', danaFirst, b => { block(b, 'phase:close').minutes!.to += 5; }],
   ['missing_ask_line', danaFirst, b => { const k = block(b, 'phase:close'); k.lines = k.lines.filter(l => l.label !== 'Ask'); }],

@@ -3,11 +3,11 @@ import { PHASE_SLOTS } from './types.ts';
 import type { PhaseDef } from './playbooks.ts';
 import { splitMinutes } from './playbooks.ts';
 import type { Ctx } from './facts.ts';
-import { blend, bump, isMemory, knows, relOf, score, validSources, warn, whyOf } from './facts.ts';
+import { blend, bump, inMeeting, isMemory, knows, relOf, score, validSources, warn, whyOf } from './facts.ts';
 import type { Limit } from './text.ts';
 import {
-  LIMITS, daysBetween, firstName, fitClause, fitText, fits, fmtValue, gapText, isDate, lineLimit, longDate,
-  monthLabel, ms, normalize, pctChange, pctText, shortDate, signed, titleLimit, wordCount,
+  LIMITS, dateParts, daysBetween, firstName, fitClause, fitText, fits, fmtValue, gapText, isDate, lineLimit, longDate,
+  monthLabel, ms, normalize, pctChange, pctText, shortDate, signed, titleLimit, valueText, wordCount,
 } from './text.ts';
 
 // ---------- lines ----------
@@ -82,7 +82,8 @@ const uniq = <T>(xs: T[]) => [...new Set(xs)];
 export function header(ctx: Ctx): Block {
   const { p, fr } = ctx;
   const stage = fr.stage === 'first' ? 'First meeting' : `Follow-up · meeting ${fr.priorMeetings.length + 1}`;
-  const base = `${longDate(p.meeting.startsAt)} · ${p.meeting.durationMin} min · ${stage}`;
+  const d = p.meeting.durationMin;
+  const base = `${longDate(p.meeting.startsAt)} · ${Number.isFinite(d) && d > 0 ? `${d} min · ` : ''}${stage}`;
   const names = fr.attendees.map(a => a.name).join(', ');
   const full = names ? `${base} · with ${names}` : base;
   const meta = plain(ctx, 'header', 0, fits(full, LIMITS.meta) ? full : base, { dedupe: false })!;
@@ -190,7 +191,9 @@ export function metricInfos(ctx: Ctx): NumberInfo[] {
     for (const pt of m.points) {
       if (!isDate(pt.date) || ms(pt.date) > now || !Number.isFinite(pt.value)) continue;
       if (!validSources(ctx, [pt.sourceId]).length) { bump(ctx, 'unsourced_dropped'); continue; }
-      byDay.set(new Date(pt.date).toISOString().slice(0, 10), pt);
+      // Two readings on one day: the later one is the latest.
+      const day = new Date(pt.date).toISOString().slice(0, 10), had = byDay.get(day);
+      if (!had || ms(pt.date) >= ms(had.date)) byDay.set(day, pt);
     }
     const points = [...byDay.values()].sort((a, b) => ms(a.date) - ms(b.date));
     if (!points.length) return;
@@ -213,7 +216,7 @@ export function metricInfos(ctx: Ctx): NumberInfo[] {
   return out;
 }
 
-const changeLabel = (iso: string) => (new Date(iso).getUTCDate() === 1 ? monthLabel(iso, false) : shortDate(iso));
+const changeLabel = (iso: string) => (dateParts(iso).day === 1 ? monthLabel(iso, false) : shortDate(iso));
 
 function numberNote(ctx: Ctx, n: NumberInfo): Line | null {
   const { m, latest, disc, prev } = n;
@@ -249,13 +252,14 @@ export function numberBlocks(ctx: Ctx, infos: NumberInfo[]): Block[] {
     (+!!b.disc - +!!a.disc) || (+b.relevant - +a.relevant) || a.index - b.index);
   return sorted.slice(0, pb.numbers).map((n, i) => {
     const lines: Line[] = [];
-    const v = claim(ctx, 'number', 0, fmtValue(n.latest.value, n.m.prefix, n.m.suffix), [n.latest.sourceId], { dedupe: false });
+    const vt = valueText(n.latest.value, n.m.prefix, n.m.suffix);
+    const v = claim(ctx, 'number', 0, vt.value, [n.latest.sourceId], { dedupe: false });
     if (v) lines.push(v);
     const note = numberNote(ctx, n);
     if (note) lines.push(note);
     return {
       id: `number:${n.m.id}`, kind: 'number', zone: 'numbers', slot: 'number', phase: 'show',
-      priority: pb.priority.number + i * pb.step, title: fit(ctx, n.m.label, LIMITS.title), lines, metricId: n.m.id,
+      priority: pb.priority.number + i * pb.step, title: fit(ctx, vt.unit ? `${n.m.label} (${vt.unit})` : n.m.label, LIMITS.title), lines, metricId: n.m.id,
       ...(whyOf(ctx, `m:${n.m.id}`) ? { why: whyOf(ctx, `m:${n.m.id}`) } : {}),
     };
   });
@@ -417,7 +421,7 @@ export function keynotes(ctx: Ctx): Block {
   const { p, pb, fr } = ctx;
   const kind: BlockKind = 'keynotes';
   const lines: (Line | null)[] = [];
-  if (fr.lastMeeting) {
+  if (fr.lastMeeting?.summary?.trim()) {
     const l = claim(ctx, kind, 0, fr.lastMeeting.summary, [fr.lastMeeting.sourceId], { label: 'Where we left off' });
     if (!l) warn(ctx, 'last_meeting_unsourced', 'The last meeting has no usable source, so it is left off', fr.lastMeeting.id);
     lines.push(l);
@@ -561,7 +565,7 @@ export function noteBlocks(ctx: Ctx, infos: NumberInfo[], promises: Line[], show
   // e.g. an investor's portfolio company that competes with the startup they're meeting.
   const placed = new Set([...news, ...proof, ...avoid].map(c => c.rel));
   const mustHave = ctx.intel ? ctx.facts
-    .filter(f => relOf(ctx, f.id) === 3 && !placed.has(f.id) && !ctx.usedFacts.has(f.id))
+    .filter(f => relOf(ctx, f.id) === 3 && inMeeting(ctx, f) && !placed.has(f.id) && !ctx.usedFacts.has(f.id))
     .map(f => fromFact(f, (f.subject.kind === 'self' && SELF_TITLES[f.topic]) || TOPIC_TITLES[f.topic], f.topic === 'portfolio' || f.topic === 'decision' ? 'rose' : 'sky', f.subject.kind === 'self' ? 'show' : 'learn')) : [];
   const soft = [...mustHave, ...(fr.stage === 'first' ? [...library, ...proof, ...news, ...avoid] : [...avoid, ...news, ...library, ...proof])];
   // Bad news, promises and objections they raised always lead; the model can't push them off.
@@ -591,7 +595,12 @@ export function noteBlocks(ctx: Ctx, infos: NumberInfo[], promises: Line[], show
 
 // ---------- questions ----------
 
-const lowerFirst = (t: string) => t.charAt(0).toLowerCase() + t.slice(1);
+// "Intro to a partner" reads as "Any update on intro to a partner?"; names and acronyms
+// ("Priya’s intro", "SSO doc", "Q3 numbers") keep their capitals.
+const lowerFirst = (t: string, names: Set<string>) => {
+  const w = t.split(/\s/)[0];
+  return /^[A-Z][a-z]+$/.test(w) && !names.has(w.toLowerCase()) ? t.charAt(0).toLowerCase() + t.slice(1) : t;
+};
 
 export function questionsBlock(ctx: Ctx): Block | null {
   const { p, pb, fr } = ctx;
@@ -606,7 +615,8 @@ export function questionsBlock(ctx: Ctx): Block | null {
     .filter(c => c.owner === 'them' && c.personId && fr.resolvedIds.has(c.personId) && isDate(c.madeAt) && ms(c.madeAt) < start &&
       !(isDate(c.doneAt) && ms(c.doneAt) <= now) && isDate(c.due) && ms(c.due) < now && c.text?.trim())
     .sort((a, b) => ms(a.due!) - ms(b.due!) || a.id.localeCompare(b.id));
-  for (const c of owed) { if (full()) break; push(plain(ctx, kind, 0, `Any update on ${lowerFirst(c.text.trim().replace(/[.?!]+$/, ''))}?`, { sourceIds: [c.sourceId] })); }
+  const names = new Set(p.people.flatMap(x => x.name.toLowerCase().split(/\s+/)));
+  for (const c of owed) { if (full()) break; push(plain(ctx, kind, 0, `Any update on ${lowerFirst(c.text.trim().replace(/[.?!]+$/, ''), names)}?`, { sourceIds: [c.sourceId] })); }
 
   // What research couldn't answer, saved questions, and (with a model) questions it wrote for
   // this meeting's unknowns, ranked together. Without a model: research gaps, then saved questions.

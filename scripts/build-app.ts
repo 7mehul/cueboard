@@ -1,11 +1,14 @@
 // Build the canvas app into one self-contained file, dist/cueboard.html, so it can be opened
 // directly or published as a Claude artifact. Usage: node scripts/build-app.ts [--watch]
-import { readFileSync, writeFileSync, mkdirSync, watch } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+// CUE_DIST puts it somewhere else (the server tests build into their own folder).
+import { readFileSync, renameSync, writeFileSync, mkdirSync, watch } from 'node:fs';
+import { resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { build } from 'esbuild';
 
 const root = new URL('../', import.meta.url);
 const at = (p: string) => new URL(p, root);
+const out = process.env.CUE_DIST ? pathToFileURL(resolve(process.env.CUE_DIST) + '/') : at('dist/');
 
 async function once() {
   const t0 = Date.now();
@@ -18,9 +21,12 @@ async function once() {
     .replace('/*FLOATCSS*/', () => readFileSync(at('app/float.css'), 'utf8'))
     .replace('/*ENGINE*/', () => engine.outputFiles[0].text.replace(/<\/script/gi, '<\\/script'))
     .replace('/*APP*/', () => readFileSync(at('app/board.js'), 'utf8'));
-  mkdirSync(at('dist/'), { recursive: true });
-  writeFileSync(at('dist/cueboard.html'), html);
-  console.log(`built dist/cueboard.html (${Math.round(html.length / 1024)} KB) in ${Date.now() - t0} ms`);
+  // Written aside and renamed into place, so a server reading it never gets half a page.
+  mkdirSync(out, { recursive: true });
+  const tmp = new URL(`cueboard.html.${process.pid}.tmp`, out);
+  writeFileSync(tmp, html);
+  renameSync(tmp, new URL('cueboard.html', out));
+  console.log(`built ${fileURLToPath(new URL('cueboard.html', out)).replace(fileURLToPath(root), '')} (${Math.round(html.length / 1024)} KB) in ${Date.now() - t0} ms`);
 }
 
 await once();

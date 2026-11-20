@@ -123,7 +123,8 @@ reading of it    present, close on the ask       numbers and proof where you pre
   whole in memory; the board shows a line of it.
 - **The plan.** With a model, the plan comes from the goal: the parts, their names, their minutes
   and what to get done in each ("Hear why seats fell before defending the price"). Code checks it
-  (opens first, closes last, minutes add up to the meeting) and falls back to the usual plan for
+  (3 or 4 parts, opens first, closes last, each part once), scales its minutes to the meeting's
+  real length, and falls back to the usual plan for
   that kind of meeting (`src/playbooks.ts`) if it doesn't hold together. What to open with sits in
   the first part and the ask in the last.
 - **On the canvas** each part is an ordinary card labelled with its minutes ("5–20 min"); retime

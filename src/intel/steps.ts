@@ -4,7 +4,7 @@ import type { LLM, Usage } from './llm.ts';
 import { BOARD_LINE, MeetingBrief, Ranking } from './schemas.ts';
 import { personaLibrary } from './knowledge.ts';
 import { candidates, meetingContext } from './context.ts';
-import { LIMITS, fits } from '../text.ts';
+import { LIMITS, fits, withZone } from '../text.ts';
 
 // The two reasoning steps. Prompts carry the judgment; the schemas keep answers usable.
 
@@ -43,7 +43,7 @@ export async function understand(llm: LLM, ctx: Ctx, infos: NumberInfo[]): Promi
   const r = await llm.json({
     step: 'understand',
     system: UNDERSTAND_SYSTEM + personaLibrary(),
-    prompt: `${meetingContext(ctx, infos)}\n\nWork out what this meeting is and what the user needs. Answer as JSON.`,
+    prompt: `${withZone(ctx.p.timeZone, () => meetingContext(ctx, infos))}\n\nWork out what this meeting is and what the user needs. Answer as JSON.`,
     schema: MeetingBrief,
     effort: 'high',
   });
@@ -56,7 +56,7 @@ export async function understand(llm: LLM, ctx: Ctx, infos: NumberInfo[]): Promi
 }
 
 export async function rank(llm: LLM, ctx: Ctx, infos: NumberInfo[], brief: MeetingBrief): Promise<{ ranking: Ranking; usage?: Usage }> {
-  const cands = candidates(ctx, infos);
+  const cands = withZone(ctx.p.timeZone, () => candidates(ctx, infos));
   const r = await llm.json({
     step: 'rank',
     system: RANK_SYSTEM,

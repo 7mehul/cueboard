@@ -64,6 +64,14 @@ export const blend = (ctx: Ctx, id: string, ruleScore: number) => {
   return r === undefined ? ruleScore : 0.3 * ruleScore + 0.7 * (r / 3);
 };
 
+// Whether a fact is about this meeting: the user, a confirmed attendee, or a confirmed attendee's
+// company. Memory holds everyone; a board shows only them.
+export function inMeeting(ctx: Ctx, f: Fact): boolean {
+  if (f.subject.kind === 'self') return true;
+  if (f.subject.kind === 'person') return ctx.fr.resolvedIds.has(f.subject.id);
+  return ctx.fr.attendees.some(a => a.resolved && a.companyId === f.subject.id);
+}
+
 export const isMemory = (ctx: Ctx, ids: string[]) =>
   ids.some(id => MEMORY_KINDS.includes(ctx.sources.get(id)?.kind as never));
 
@@ -138,7 +146,7 @@ export function score(ctx: Ctx, f: Fact, topics: FactTopic[]): number {
 
 // Does anything known (used or not) answer this topic for the people in the meeting?
 export function knows(ctx: Ctx, topic: FactTopic): boolean {
-  const companies = new Set(ctx.fr.attendees.map(a => a.companyId).filter(Boolean));
+  const companies = new Set(ctx.fr.attendees.filter(a => a.resolved).map(a => a.companyId).filter(Boolean));
   return ctx.facts.some(f => f.topic === topic &&
     ((f.subject.kind === 'person' && ctx.fr.resolvedIds.has(f.subject.id)) ||
      (f.subject.kind === 'company' && companies.has(f.subject.id))));

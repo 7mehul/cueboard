@@ -170,8 +170,12 @@ export function playbookFor(type: MeetingType, stage: Stage): Playbook {
 
 // Whole minutes for each share of a meeting, adding up to its length. Long meetings are planned
 // in fives; every part gets at least a minute.
+// How long a plan runs: the meeting's length in whole minutes, at least a minute a part. A length
+// that's missing or not a number counts as none. The checker uses this too.
+export const planLength = (durationMin: number, parts: number) => Math.max(parts, Number.isFinite(durationMin) ? Math.round(durationMin) : 0);
+
 export function splitMinutes(durationMin: number, shares: number[]): number[] {
-  const total = Math.max(shares.length, Math.round(durationMin) || 0);
+  const total = planLength(durationMin, shares.length);
   const sum = shares.reduce((a, b) => a + Math.max(0, b), 0) || shares.length;
   const step = total >= 45 && total % 5 === 0 ? 5 : 1;
   const out = shares.map(s => Math.max(step, Math.round((Math.max(0, s) / sum) * total / step) * step));

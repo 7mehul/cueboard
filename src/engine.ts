@@ -9,6 +9,7 @@ import {
   numberBlocks, personCards, phaseBlocks, questionsBlock, timelineBlock, trendBlock,
 } from './compose.ts';
 import { layout } from './layout.ts';
+import { withZone } from './text.ts';
 
 export interface EngineOptions {
   classify?: Classifier;
@@ -39,14 +40,19 @@ export function readPacket(p: Packet, o: EngineOptions = {}) {
 
 // Packet in, board out. Pure and deterministic: no model calls, no clock, no randomness.
 export function buildBoard(p: Packet, o: EngineOptions = {}): Board {
+  return withZone(p.timeZone, () => build(p, o));
+}
+function build(p: Packet, o: EngineOptions): Board {
   // A model's meeting type stands in for the keyword guess, but never for a type the user set.
   const modelType = o.intel?.brief?.meetingType as Board['type'] | undefined;
   const fr = frame(p, modelType ? () => modelType : o.classify);
   const pb = playbookFor(fr.type, fr.stage);
   const ctx = makeCtx(p, pb, fr, o.intel);
 
-  // Order matters: earlier blocks claim facts first, and a fact appears only once.
+  // Order matters: earlier blocks claim facts and lines first, and each appears only once. The goal
+  // and where you left off come first, so a person card can't take their words.
   const head = header(ctx);
+  const keys = keynotes(ctx);
   const people = personCards(ctx);
   const infos = metricInfos(ctx);
   const numbers = numberBlocks(ctx, infos);
@@ -55,7 +61,6 @@ export function buildBoard(p: Packet, o: EngineOptions = {}): Board {
   const bars = barsBlock(ctx);
   const promises = commitmentLines(ctx, 'timeline');
   const timeline = timelineBlock(ctx, promises);
-  const keys = keynotes(ctx);
   const plan = phaseBlocks(ctx, infos);
   const notes = noteBlocks(ctx, infos, timeline ? [] : promises, shownMetrics);
   const questions = questionsBlock(ctx);

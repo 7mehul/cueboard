@@ -249,3 +249,87 @@ test('minutes always add up, in fives for long meetings', () => {
     assert.ok(m.every(v => v >= 1));
   }
 });
+
+// ---------- what the engine audit found ----------
+import { fitClause, fmtNum } from '../src/text.ts';
+import { checkBoard as check } from '../src/check.ts';
+import { buildBoardSmart } from '../src/intel/smart.ts';
+import { scripted } from '../src/intel/providers/scripted.ts';
+
+const keyLine = (b: ReturnType<typeof buildBoard>, label: string) => b.blocks.flatMap(x => x.lines).find(l => l.label === label);
+
+test('a long goal keeps whole numbers and times, and ends on a whole sentence', () => {
+  const line = { words: 10, chars: 64 };
+  assert.doesNotMatch(fitClause('Agree a pilot at $12,500 per month with Dana Ruiz from Ridgeway and her CFO before the end of January', line).text, /\$12$/);
+  assert.doesNotMatch(fitClause('Meet at 10:30 with the full partnership, then send the cohort table and the pricing memo', line).text, /at 10$/);
+  assert.equal(fitClause('Find out if they can lead. If not, ask who could lead the round instead.', line).text, 'Find out if they can lead');
+  const p = danaFirst(); p.meeting.goal = 'Agree a pilot at $12,500 per month with Dana Ruiz from Ridgeway and her CFO before the end of January';
+  assert.doesNotMatch(keyLine(buildBoard(p), 'Goal')!.text, /\$12$/);
+});
+
+test('cutting a long word never leaves half an emoji, and numbers round up a unit', () => {
+  const r = fitText('🚀'.repeat(40), { words: 10, chars: 20 });
+  assert.ok(!/[\ud800-\udbff](?![\udc00-\udfff])/.test(r.text) && r.text.length <= 20, r.text);
+  assert.deepEqual([fmtNum(999_999), fmtNum(999_999_999), fmtNum(0.004), fmtNum(12_345)], ['1M', '1B', '0.004', '12.3k']);
+});
+
+test('dates are shown in the user’s time zone', () => {
+  const p = danaFirst(); p.meeting.startsAt = '2026-09-17T00:30:00Z'; // 5:30pm on Wed Sep 16 in San Francisco
+  assert.match(buildBoard(p).blocks[0].lines[0].text, /^Thu Sep 17/, 'UTC without a zone');
+  p.timeZone = 'America/Los_Angeles';
+  const b = buildBoard(p);
+  assert.match(b.blocks[0].lines[0].text, /^Wed Sep 16/);
+  assert.deepEqual(check(b, p), []);
+});
+
+test('facts about companies with no one in the meeting stay off the board, whatever a model says', async () => {
+  const p = danaFirst();
+  p.companies.push({ id: 'c-ridgeway', name: 'Ridgeway' });
+  p.facts.push({ id: 'f-other', subject: { kind: 'company', id: 'c-ridgeway' }, topic: 'pain', text: 'Ridgeway thinks our price is too high', sourceIds: ['s-profile'], confidence: 0.9 });
+  const r = await buildBoardSmart(p, scripted({ understand: () => ({ persona: 'other', meetingType: 'investor', process: 'p', step: 's', purpose: 'p', goal: { text: 'x', basis: 'stated', alternatives: [] }, theyWant: [], decides: [], opener: '', ask: '', risks: [], numbers: 'ours', needs: [], unknowns: [] }), rank: () => ({ items: [{ id: 'f-other', score: 3, why: 'important' }], questions: [] }) }));
+  assert.ok(!JSON.stringify(r.board.blocks).includes('Ridgeway thinks'));
+});
+
+test('the goal and where you left off can’t be taken by a person card or repeated by it', () => {
+  const p = danaFollowup();
+  p.facts.push({ id: 'f-same', subject: { kind: 'person', id: 'p-dana' }, topic: 'interest', text: 'She wanted a month more of cohorts', sourceIds: ['s-debrief-1'], confidence: 0.9 });
+  const b = buildBoard(p);
+  assert.deepEqual(check(b, p), []);
+  assert.equal(keyLine(b, 'Where we left off')!.text, 'She wanted a month more of cohorts');
+  const q = danaFirst(); q.meeting.goal = 'Digs into retention cohorts';
+  assert.deepEqual(check(buildBoard(q), q), [], 'a goal that matches a person fact');
+  const blank = danaFollowup(); blank.touches.find(t => t.id === 't-call-1')!.summary = '   ';
+  assert.equal(keyLine(buildBoard(blank), 'Where we left off'), undefined);
+});
+
+test('numbers: the later reading of a day wins, long units move to the title, a missing length breaks nothing', () => {
+  const p = danaFollowup();
+  const mrr = p.metrics.find(m => m.id === 'mrr')!;
+  mrr.points.push({ date: '2026-10-02T17:00:00Z', value: 49000, sourceId: 's-metrics' }, { date: '2026-10-02T09:00:00Z', value: 48500, sourceId: 's-metrics' });
+  let b = buildBoard(p);
+  assert.equal(b.blocks.find(x => x.id === 'number:mrr')!.lines[0].text, '$49k');
+  assert.deepEqual(check(b, p), []);
+  mrr.suffix = ' per month';
+  b = buildBoard(p);
+  const card = b.blocks.find(x => x.id === 'number:mrr')!;
+  assert.deepEqual([card.lines[0].text, card.title], ['$49k', 'MRR (per month)']);
+  assert.deepEqual(check(b, p), []);
+  const q = danaFirst(); q.meeting.durationMin = NaN;
+  b = buildBoard(q);
+  assert.deepEqual(check(b, q), []);
+  assert.doesNotMatch(b.blocks[0].lines[0].text, /NaN/);
+});
+
+test('follow-up questions keep names and acronyms capitalised', () => {
+  const p = danaFollowup();
+  p.commitments.find(c => c.id === 'c-intro')!.text = 'SSO requirements doc';
+  assert.ok(buildBoard(p).blocks.find(x => x.id === 'questions')!.lines.some(l => l.text === 'Any update on SSO requirements doc?'));
+  const q = danaFollowup();
+  assert.ok(buildBoard(q).blocks.find(x => x.id === 'questions')!.lines.some(l => l.text === 'Any update on intro to a platform partner?'));
+});
+
+test('the checker reads "up" and "down" against the same shared value the engine uses', () => {
+  const p = danaFollowup();
+  p.disclosures.push({ metricId: 'churn', personId: 'p-dana', value: null as unknown as number, date: '2026-10-05', sourceId: 's-debrief-1' });
+  assert.deepEqual(check(buildBoard(p), p), []);
+});
