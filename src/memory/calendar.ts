@@ -37,13 +37,13 @@ const slug = (t: string) => normalize(t).replace(/ /g, '-').slice(0, 32) || 'x';
 const safeId = (id: string) => id.replace(/[^\w-]/g, '-').slice(0, 60);
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-// "maya.chen@larkspur.vc" → "Maya Chen", for guests without a display name.
+// "maya.chen@larkspur.example" → "Maya Chen", for guests without a display name.
 export function nameFromEmail(email: string): string {
   const local = email.split('@')[0].replace(/\+.*$/, '');
   const parts = local.split(/[._-]+/).filter(p => p && !/^\d+$/.test(p));
   return parts.length ? parts.map(cap).join(' ') : email;
 }
-// "larkspur.vc" → "Larkspur"; "go.acme.co.uk" → "Acme".
+// "larkspur.example" → "Larkspur"; "go.acme.co.uk" → "Acme".
 export function companyFromDomain(domain: string): string {
   const labels = domain.split('.').filter(l => !['www', 'mail', 'go', 'app', 'co', 'com', 'org', 'net', 'io', 'ac', 'gov'].includes(l));
   const name = (labels.length > 1 ? labels.slice(0, -1) : labels)[0] ?? domain.split('.')[0];
@@ -76,7 +76,7 @@ export function syncCalendar(memory: Memory, events: CalendarEvent[], opts: { no
     const d = companyDomain(email);
     if (!d || d === ownDomain) return undefined;
     let co = m.companies.find(c => c.domain === d);
-    // A company someone pasted about, without its domain yet: "Larkspur Ventures" for larkspur.vc.
+    // A company someone pasted about, without its domain yet: "Larkspur Ventures" for larkspur.example.
     if (!co) { const label = normalize(companyFromDomain(d)); co = m.companies.find(c => !c.domain && normalize(c.name).split(' ')[0] === label); if (co) co.domain = d; }
     if (!co) { co = { id: uniq(`co-${slug(companyFromDomain(d))}`), name: companyFromDomain(d), domain: d } as Company; m.companies.push(co); }
     return co.id;

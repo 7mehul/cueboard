@@ -14,7 +14,8 @@ import { danaFollowup } from './fixtures.ts';
 // model). Second: the guard rails hold whatever the model says.
 
 type Rank = Record<string, number>;
-const brief = (b: { type: string; goal: string; numbers: string; decides?: string; opener?: string; ask?: string }) => ({
+const brief = (b: { type: string; goal: string; numbers: string; decides?: string; opener?: string; ask?: string; plan?: object[] }) => ({
+  ...(b.plan ? { plan: b.plan } : {}),
   persona: 'other', meetingType: b.type, process: 'p', step: 's', purpose: 'p',
   goal: { text: b.goal, basis: 'inferred', alternatives: [] }, theyWant: [], decides: [b.decides ?? 'What they need to hear'],
   opener: b.opener ?? '', ask: b.ask ?? '', risks: [],
@@ -120,7 +121,7 @@ test('a suggested goal is marked as a suggestion, not a fact', async () => {
 });
 
 test('the model’s opener and ask fill the run of show as suggestions; the user’s own playbook wins', async () => {
-  const keyLine = (r: Awaited<ReturnType<typeof buildBoardSmart>>, label: string) => r.board.blocks.find(b => b.kind === 'keynotes')!.lines.find(l => l.label === label)!;
+  const keyLine = (r: Awaited<ReturnType<typeof buildBoardSmart>>, label: string) => r.board.blocks.flatMap(b => b.lines).find(l => l.label === label)!;
   const draft = { opener: 'Ask how Calder’s DACH customers handle duplicate tickets', ask: 'A call with Felix’s team about one DACH customer' };
 
   const p = scenarios().find(s => s.id === 'partnerships-first-meeting')!;
@@ -146,7 +147,7 @@ test('a drafted line that runs long keeps its first whole clause instead of a mi
   }));
   const key = r.board.blocks.find(b => b.kind === 'keynotes')!;
   assert.equal(key.lines.find(l => l.label === 'Goal')!.text, 'Answer Ravi’s 120-seat price and Tomás’s SSO/EU residency');
-  assert.equal(key.lines.find(l => l.label === 'Ask')!.text, 'Agree a proposal review date with Ravi, Tomás and Hannah');
+  assert.equal(r.board.blocks.find(b => b.id === 'phase:close')!.lines.find(l => l.label === 'Ask')!.text, 'Agree a proposal review date with Ravi, Tomás and Hannah');
   assert.deepEqual(checkBoard(r.board, s.packet), []);
 });
 
@@ -174,4 +175,30 @@ test('no model at all: the rules board, unchanged', async () => {
   const r = await buildBoardSmart(s.packet, null);
   assert.equal(r.mode, 'rules');
   assert.deepEqual(r.board, buildBoard(s.packet));
+});
+
+test('the model’s plan shapes the board: its parts, its minutes, what to get done in each', async () => {
+  const s = scenarios().find(x => x.id === 'ae-demo-new-stakeholders')!;
+  const plan = [
+    { slot: 'open', name: 'Open', minutes: 5, aim: 'ignored: the opener goes here' },
+    { slot: 'learn', name: 'Security worries', minutes: 20, aim: 'Get Tomás to list what blocks sign-off' },
+    { slot: 'show', name: 'Pricing answer', minutes: 20, aim: 'Walk Ravi through the 120-seat price' },
+    { slot: 'close', name: 'Pilot date', minutes: 5, aim: '' },
+  ];
+  const r = await buildBoardSmart(s.packet, scripted({ understand: () => brief({ type: 'customer', goal: 'Clear security and pricing', numbers: 'theirs', ask: 'A pilot start in November', plan }), rank: () => ranking({}) }));
+  assert.equal(r.mode, 'model');
+  const parts = r.board.blocks.filter(b => b.kind === 'phase');
+  assert.deepEqual(parts.map(b => b.title), ['Open', 'Security worries', 'Pricing answer', 'Pilot date']);
+  assert.equal(parts.at(-1)!.minutes!.to, s.packet.meeting.durationMin, 'scaled to the meeting’s real length');
+  const aim = parts[1].lines[0];
+  assert.deepEqual([aim.text, aim.suggested, aim.claim], ['Get Tomás to list what blocks sign-off', true, false], 'an aim is a suggestion, never a claim');
+  assert.ok(!parts[0].lines.some(l => /ignored/.test(l.text)));
+  assert.equal(parts[3].lines.find(l => l.label === 'Ask')!.text, 'A pilot start in November');
+
+  // A plan that doesn't hold together (no close, a slot twice) is replaced by the usual one.
+  const bad = [plan[0], plan[1], { ...plan[1], name: 'Again' }];
+  const r2 = await buildBoardSmart(s.packet, scripted({ understand: () => brief({ type: 'customer', goal: 'x', numbers: 'theirs', plan: bad }), rank: () => ranking({}) }));
+  assert.equal(r2.mode, 'model');
+  assert.deepEqual(r2.board.blocks.filter(b => b.kind === 'phase').map(b => b.phase), ['open', 'learn', 'show', 'close']);
+  assert.ok(r2.board.warnings.some(w => w.code === 'plan_fallback'));
 });

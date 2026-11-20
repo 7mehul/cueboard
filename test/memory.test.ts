@@ -68,7 +68,7 @@ test('a number has to be written in its own quote: no arithmetic, no rounding, n
 test('people: never the user, no made-up emails, unknown ids don’t link', () => {
   const s = STORY[1];
   const x: Extraction = structuredClone(bindKnown(s.ideal, {}));
-  x.people.push({ ref: 'p9', knownId: null, name: 'Alex Rivera', email: 'alex@cueboard.app', companyRef: null });
+  x.people.push({ ref: 'p9', knownId: null, name: 'Alex Rivera', email: 'alex@cueboard.example', companyRef: null });
   x.people[1].email = 'sam.patel@gmail.com'; // not in the email
   x.people[0].knownId = 'p-ghost';
   x.facts.push({ about: 'p9', topic: 'role', text: 'Founder of Cueboard', quote: 'Alex is building Cueboard' });
@@ -101,11 +101,11 @@ test('a person the user doesn’t confirm brings nothing with them', () => {
 
 test('only what the document is about goes to the model', async () => {
   const { m } = ingest(2);
-  m.people.push({ id: 'p-grace', name: 'Grace Okafor', email: 'grace@ridgeway.com', resolved: true });
+  m.people.push({ id: 'p-grace', name: 'Grace Okafor', email: 'grace@ridgeway.example', resolved: true });
   const prompt = readPrompt(m, STORY[2].doc);
   assert.match(prompt, /Maya Chen/);
   assert.doesNotMatch(prompt, /Grace/);
-  assert.match(prompt, /Alex Rivera <alex@cueboard.app>, Founder & CEO at Cueboard/);
+  assert.match(prompt, /Alex Rivera <alex@cueboard.example>, Founder & CEO at Cueboard/);
   const llm = scripted({ extract: () => toAnswer(bindKnown(STORY[2].ideal, idsFrom(m))) });
   const r = await readDoc(llm, m, STORY[2].doc);
   assert.ok(r.proposal.items.length > 5);
@@ -120,7 +120,7 @@ test('first meeting: the board knows Maya from the invite and the intro', () => 
   assert.equal(b.stage, 'first');
   const maya = b.blocks.find(x => x.kind === 'person')!;
   assert.equal(maya.title, 'Maya Chen');
-  assert.ok(maya.lines.some(l => /Fieldwork and Tally/.test(l.text)));
+  assert.ok(maya.lines.some(l => /Fieldwork and Loomwise/.test(l.text)));
   assert.ok(p.context!.some(d => /meet Alex/.test(d.text)), 'the intro email is there for the model to read');
 });
 

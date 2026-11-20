@@ -68,7 +68,7 @@ export class Limiter {
 }
 
 // What the page may report. Each is an action, never content: no titles, names or text.
-export const CLIENT_EVENTS = new Set(['app_opened', 'today_opened', 'board_made', 'board_drafted', 'board_refreshed', 'board_opened', 'float_opened', 'memory_saved', 'calendar_connected']);
+export const CLIENT_EVENTS = new Set(['app_opened', 'today_opened', 'board_made', 'board_drafted', 'board_refreshed', 'board_opened', 'float_opened', 'memory_saved', 'calendar_connected', 'goal_set']);
 
 export type UsageEvent = { t: string; who: string; ev: string; kind?: string; n?: number; tokens?: number; ms?: number; ok?: boolean };
 

@@ -6,6 +6,9 @@
 //   With GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET set, people can connect Google Calendar.
 //   --fake-model answers for the sample documents only; --fake-granola serves two sample notes;
 //   --fake-calendar serves a sample week of meetings and connects without Google.
+//   --demo serves a whole founder's week to explore (scenarios/demo.ts): its calendar, its Granola
+//   notes, and memory to start from, which the page offers to load. Add --fake-model to play it
+//   without a key; with ANTHROPIC_API_KEY set, Claude reads it.
 //   --hosted is the test version on the internet: invite codes, a daily allowance of model calls
 //   per tester, and a usage log. It needs CUE_INVITES and CUE_SECRET; see README "Hosted test".
 import { createServer } from 'node:http';
@@ -28,9 +31,15 @@ const port = hosted ? Number(process.env.PORT) || argPort || 10000 : argPort || 
 const dist = new URL('../dist/', import.meta.url);
 const origins = new Set([`http://localhost:${port}`, `http://127.0.0.1:${port}`]);
 
+// A sign-in saved by `ant auth login` on this machine counts as a key. The SDK finds it itself;
+// this only asks whether there is one.
+async function signedIn() {
+  try { return !!(await (await import('@anthropic-ai/sdk/core/credentials')).loadCredentials()); } catch { return false; }
+}
+
 let llm: LLM | null = null;
 if (args.includes('--fake-model')) llm = (await import('../scenarios/fake-model.ts')).fakeModel();
-else if (process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN || process.env.ANTHROPIC_PROFILE) {
+else if (process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN || process.env.ANTHROPIC_PROFILE || (!hosted && await signedIn())) {
   llm = (await import('../src/intel/providers/claude.ts')).claude();
 }
 
@@ -58,12 +67,17 @@ if (H) await H.usage.load();
 const GRANOLA = 'https://public-api.granola.ai/v1';
 const granolaKey = hosted ? undefined : process.env.GRANOLA_API_KEY;
 if (hosted && process.env.GRANOLA_API_KEY) console.warn('GRANOLA_API_KEY is ignored in the hosted version');
-const fakeGranola = !hosted && args.includes('--fake-granola') ? (await import('../scenarios/granola.ts')).GRANOLA_NOTES : null;
+const demo = !hosted && args.includes('--demo') ? await import('../scenarios/demo.ts') : null;
+const sampleNotes = !hosted && args.includes('--fake-granola') ? (await import('../scenarios/granola.ts')).GRANOLA_NOTES : null;
+// Sample notes, dated from today when they're the demo's.
+const fakeNotes = () => (demo ? demo.demoWorld(new Date()).granola : sampleNotes);
+const fakeGranola = !!(demo || sampleNotes);
 
 // Google Calendar, read-only. The grant is sealed into a cookie with the hosted secret, or with a
 // key this machine keeps in data/ (never committed), so restarting keeps people connected.
 const googleId = process.env.GOOGLE_CLIENT_ID, googleSecret = process.env.GOOGLE_CLIENT_SECRET;
-const fakeCalendar = args.includes('--fake-calendar') ? await import('../scenarios/calendar.ts') : null;
+const fakeCalendar = args.includes('--fake-calendar') || demo ? await import('../scenarios/calendar.ts') : null;
+const sampleEvents = (now: Date) => (demo ? demo.demoWorld(now).events : fakeCalendar!.fakeEvents(now));
 const calendarOn = !!(googleId && googleSecret) || !!fakeCalendar;
 async function localKey(): Promise<string> {
   const dir = new URL('../data/', import.meta.url), file = new URL('local.key', dir);
@@ -195,7 +209,7 @@ async function granolaApi(req: IncomingMessage, res: ServerResponse, path: strin
       const cursor = (query.get('cursor') ?? '').slice(0, 500);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(after)) { send(res, 400, { error: { code: 'other', message: 'after must be a date' } }); return; }
       if (fakeGranola) {
-        const notes = fakeGranola.filter(n => n.created_at.slice(0, 10) >= after).map(n => ({ id: n.id, title: n.title, created_at: n.created_at }));
+        const notes = fakeNotes()!.filter(n => n.created_at.slice(0, 10) >= after).map(n => ({ id: n.id, title: n.title, created_at: n.created_at }));
         send(res, 200, { notes, hasMore: false, cursor: null }); return;
       }
       const r = await granolaGet(`/notes?created_after=${after}&page_size=30${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
@@ -208,7 +222,7 @@ async function granolaApi(req: IncomingMessage, res: ServerResponse, path: strin
     const m = /^\/api\/granola\/notes\/(not_[a-zA-Z0-9]{14})$/.exec(path);
     if (m) {
       const id = m[1];
-      if (fakeGranola) { const n = fakeGranola.find(x => x.id === id); send(res, n ? 200 : 404, n ?? { error: granolaError(404) }); return; }
+      if (fakeGranola) { const n = fakeNotes()!.find(x => x.id === id); send(res, n ? 200 : 404, n ?? { error: granolaError(404) }); return; }
       let r = await granolaGet(`/notes/${id}?include=transcript`);
       // A transcript too long to send inline comes in pages.
       if (r.status === 413) {
@@ -268,7 +282,7 @@ async function calendarApi(req: IncomingMessage, res: ServerResponse, path: stri
     if (!calendarOn) { send(res, 503, { error: { code: 'unavailable', message: 'Google Calendar isn’t set up on this server.' } }); return; }
     if (!grant || (!grant.rt && !grant.fake)) { send(res, 401, { error: { code: 'reconnect', message: 'Connect your Google Calendar first.' } }); return; }
     const now = Date.now(), from = new Date(now - 14 * 864e5).toISOString(), to = new Date(now + 14 * 864e5).toISOString();
-    if (grant.fake && fakeCalendar) { send(res, 200, { email: fakeCalendar.FAKE_SELF, from, to, events: fakeCalendar.fakeEvents(new Date(now)) }); return; }
+    if (grant.fake && fakeCalendar) { send(res, 200, { email: fakeCalendar.FAKE_SELF, from, to, events: sampleEvents(new Date(now)) }); return; }
     try {
       let r;
       try { r = await listEvents(await accessToken(grant.rt!), from, to); }
@@ -374,6 +388,13 @@ createServer(async (req, res) => {
   if (path === '/api/chat') { await chatApi(req, res, who); return; }
   if (path === '/api/granola' || path.startsWith('/api/granola/')) { await granolaApi(req, res, path, url.searchParams); return; }
   if (path === '/api/calendar' || path.startsWith('/api/calendar/')) { await calendarApi(req, res, path, who); return; }
+  if (path === '/api/demo') {
+    if (!demo) { send(res, 404, { error: { code: 'other', message: 'Start Cueboard with --demo for the demo week' } }); return; }
+    if (!allowed(req) || req.method !== 'GET') { notAllowed(res); return; }
+    const now = new Date(), w = demo.demoWorld(now);
+    send(res, 200, { memory: demo.demoMemory(now), samples: w.samples, calendar: Object.fromEntries(w.events.map(e => [e.id, e.title])) });
+    return;
+  }
   if (path.startsWith('/oauth/google/')) { await oauth(req, res, path, url.searchParams); return; }
   const file = path === '/' ? 'cueboard.html' : path.slice(1);
   if (file.includes('..')) { res.writeHead(400).end(); return; }
@@ -386,4 +407,4 @@ createServer(async (req, res) => {
   }
 }).listen(port, hosted ? '0.0.0.0' : '127.0.0.1', () => console.log(hosted
   ? `hosted test version on port ${port} · model: ${llm ? llm.name : 'none (set ANTHROPIC_API_KEY)'} · calendar: ${calendarOn ? 'on' : 'off (set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)'} · ${H!.names.size} invites · ${H!.perTester} model calls per tester a day, ${H!.total} in all · usage log: ${process.env.CUE_DATA_DIR ? process.env.CUE_DATA_DIR + '/usage.jsonl' : 'stdout only (set CUE_DATA_DIR to keep it)'}`
-  : `serving http://localhost:${port} · model: ${llm ? llm.name : 'none (rules only; set ANTHROPIC_API_KEY for Claude)'} · Granola: ${fakeGranola ? 'sample notes' : granolaKey ? 'connected' : 'off (set GRANOLA_API_KEY)'} · calendar: ${fakeCalendar ? 'sample week' : calendarOn ? 'on' : 'off (set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)'}`));
+  : `serving http://localhost:${port}${demo ? ' · the demo week' : ''} · model: ${llm ? llm.name : 'none (rules only; run `ant auth login` or set ANTHROPIC_API_KEY for Claude)'} · Granola: ${fakeGranola ? 'sample notes' : granolaKey ? 'connected' : 'off (set GRANOLA_API_KEY)'} · calendar: ${fakeCalendar ? 'sample week' : calendarOn ? 'on' : 'off (set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)'}`));

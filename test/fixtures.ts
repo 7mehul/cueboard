@@ -14,10 +14,10 @@ export function danaFirst(): Packet {
       durationMin: 30, type: 'investor', goal: 'Get the full-partner meeting', attendeeIds: ['p-dana'],
     },
     self: { companyName: 'Cueboard' },
-    people: [{ id: 'p-dana', name: 'Dana Ruiz', email: 'dana@halyard.vc', companyId: 'c-halyard', resolved: true }],
-    companies: [{ id: 'c-halyard', name: 'Halyard Ventures', domain: 'halyard.vc' }],
+    people: [{ id: 'p-dana', name: 'Dana Ruiz', email: 'dana@halyard.example', companyId: 'c-halyard', resolved: true }],
+    companies: [{ id: 'c-halyard', name: 'Halyard Ventures', domain: 'halyard.example' }],
     sources: [
-      { id: 's-team', kind: 'web', ref: 'https://halyard.vc/team', seenAt: '2026-09-15' },
+      { id: 's-team', kind: 'web', ref: 'https://halyard.example/team', seenAt: '2026-09-15' },
       { id: 's-podcast', kind: 'web', ref: 'https://example.com/podcast/dana-ruiz', seenAt: '2026-09-15' },
       { id: 's-intro', kind: 'email', ref: 'msg:intro-priya', seenAt: '2026-08-28', ownerId: U },
       { id: 's-profile', kind: 'profile', ref: 'company profile', seenAt: '2026-09-01' },

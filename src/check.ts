@@ -1,5 +1,5 @@
 import type { Board, Packet, Placement } from './types.ts';
-import { MEMORY_KINDS } from './types.ts';
+import { MEMORY_KINDS, PHASE_SLOTS } from './types.ts';
 import { MIN_CONFIDENCE, NEWS_MAX_AGE_DAYS } from './facts.ts';
 import { blockBudget } from './playbooks.ts';
 import { LIMITS, daysBetween, fits, fmtValue, isDate, lineLimit, ms, normalize, titleLimit } from './text.ts';
@@ -29,10 +29,10 @@ export function checkBoard(board: Board, p: Packet, opts: { maxBlocks?: number }
   if (!board.blocks.some(b => b.kind === 'keynotes')) add('missing_keynotes', 'Every board has key notes');
   if (attendees.length && !board.blocks.some(b => b.kind === 'person')) add('missing_person', 'The first attendee has no card');
   const max = opts.maxBlocks ?? blockBudget(p.meeting.durationMin);
-  const used = board.blocks.filter(b => b.kind !== 'header').length;
+  const used = board.blocks.filter(b => b.kind !== 'header' && b.kind !== 'phase').length;
   if (used > max) add('over_block_budget', `${used} blocks for a ${p.meeting.durationMin}-minute meeting (max ${max})`);
   for (const b of board.blocks) {
-    if (!b.lines.length && !b.chart?.points.length && !b.events?.length) add('empty_block', `${b.id} has nothing in it`, b.id);
+    if (!b.lines.length && !b.chart?.points.length && !b.events?.length && b.kind !== 'phase') add('empty_block', `${b.id} has nothing in it`, b.id);
     if (!fits(b.title, titleLimit(b.kind))) add('title_over_limit', `${b.id}: “${b.title}”`, b.id);
   }
 
@@ -64,7 +64,7 @@ export function checkBoard(board: Board, p: Packet, opts: { maxBlocks?: number }
         if (f.topic === 'news' && (!isDate(f.date) || daysBetween(f.date, p.meeting.startsAt) > NEWS_MAX_AGE_DAYS)) add('stale_news', `${ref} news from ${f.date}`, ref);
         if (!l.claim) add('fact_not_claim', `${ref} shows a fact without marking it a claim`, ref);
       }
-      const textual = b.kind === 'person' || b.kind === 'keynotes' || b.kind === 'questions' || b.kind === 'note' || b.kind === 'timeline';
+      const textual = b.kind === 'person' || b.kind === 'keynotes' || b.kind === 'phase' || b.kind === 'questions' || b.kind === 'note' || b.kind === 'timeline';
       if (textual && !l.gap) {
         const k = normalize(l.text);
         if (seenText.has(k)) add('duplicate_line', `“${l.text}” appears twice`, ref);
@@ -104,6 +104,21 @@ export function checkBoard(board: Board, p: Packet, opts: { maxBlocks?: number }
   if (board.stage === 'followup' && last && okSource(last.sourceId) && last.summary?.trim() &&
       !keyBlock?.lines.some(l => l.label === 'Where we left off')) add('missing_left_off', 'A follow-up must say where you left off');
   if (keyBlock && !keyBlock.lines.some(l => l.label === 'Goal')) add('missing_goal_line', 'Key notes must carry the goal, or a gap for it');
+
+  // ---------- the plan ----------
+  // Three or four parts, opening first and closing last, covering the meeting minute for minute.
+  const phases = board.blocks.filter(b => b.kind === 'phase');
+  const slots = phases.map(b => b.phase);
+  if (phases.length < 3 || phases.length > 4 || slots[0] !== 'open' || slots.at(-1) !== 'close' ||
+      new Set(slots).size !== slots.length || !slots.every(x => (PHASE_SLOTS as unknown[]).includes(x))) add('plan_shape', `The plan runs ${slots.join(' → ') || 'nowhere'}`);
+  let clock = 0;
+  for (const b of phases) {
+    if (!b.minutes || b.minutes.from !== clock || !(b.minutes.to > b.minutes.from)) add('plan_minutes', `${b.id} runs ${b.minutes?.from}–${b.minutes?.to}, after minute ${clock}`, b.id);
+    clock = b.minutes?.to ?? clock;
+  }
+  if (phases.length && clock !== Math.max(phases.length, Math.round(p.meeting.durationMin))) add('plan_minutes', `The plan ends at minute ${clock} of ${p.meeting.durationMin}`);
+  if (!phases.at(-1)?.lines.some(l => l.label === 'Ask')) add('missing_ask_line', 'The plan must end on the ask, or a gap for it');
+  for (const b of board.blocks) if (b.kind !== 'phase' && b.phase && !(PHASE_SLOTS as unknown[]).includes(b.phase)) add('plan_shape', `${b.id} sits under an unknown part`, b.id);
 
   // ---------- numbers ----------
   for (const b of board.blocks.filter(b => b.kind === 'number')) {
@@ -159,7 +174,7 @@ export function checkBoard(board: Board, p: Packet, opts: { maxBlocks?: number }
   };
   for (const b of board.blocks) {
     const said = b.id.startsWith('note:worse:') ? /^(.+) is (up|down)$/.exec(b.title) : null;
-    const opener = b.kind === 'keynotes' ? b.lines.find(l => l.label === 'Open with' && !l.gap) : undefined;
+    const opener = b.kind === 'phase' ? b.lines.find(l => l.label === 'Open with' && !l.gap) : undefined;
     const said2 = opener ? /^(.+) (up|down) \d+% since /.exec(opener.text) : null;
     for (const m of [said, said2]) {
       if (!m) continue;

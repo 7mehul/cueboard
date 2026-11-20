@@ -35,7 +35,7 @@ test('calendar files, transcripts and dated email headers', () => {
   assert.deepEqual(splitPaste(ics, TODAY).map(c => [c.kind, c.title]), [['invite', 'Invite: Brightdesk evaluation']]);
   const transcript = ['[00:01] Hannah Becker: Thanks for joining.', '[00:04] Ravi Iyer: Can we start with pricing?', 'Alex Rivera: Sure, 120 seats is...', 'Ravi Iyer: And the annual discount?', 'Alex Rivera: Fifteen percent.', 'Tomás Alvarez: SSO first, please.'].join('\n');
   assert.equal(splitPaste(transcript, TODAY)[0].kind, 'transcript');
-  const mail = 'From: Ravi Iyer <ravi@brightdesk.com>\nDate: Thu, 9 Oct 2026 14:02\nSubject: Pricing\n\nCan you send the 120-seat price?';
+  const mail = 'From: Ravi Iyer <ravi@brightdesk.example>\nDate: Thu, 9 Oct 2026 14:02\nSubject: Pricing\n\nCan you send the 120-seat price?';
   assert.equal(splitPaste(mail, TODAY)[0].date, '2026-10-09');
 });
 

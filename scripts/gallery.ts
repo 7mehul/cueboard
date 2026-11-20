@@ -94,6 +94,8 @@ function blockHtml(b: Block, pl: { x: number; y: number; w: number; h: number })
     }
     case 'keynotes':
       return `<div class="blk card" data-c="mint" style="${style}">${head('Key notes')}${b.lines.map(lineHtml).join('')}</div>`;
+    case 'phase':
+      return `<div class="blk card" data-c="lilac" style="${style}">${head(`${b.minutes?.from}–${b.minutes?.to} min`)}<div class="title">${esc(b.title)}</div>${b.lines.map(lineHtml).join('')}</div>`;
     case 'questions':
       return `<div class="blk card" style="${style}"><div class="title">${esc(b.title)}</div>${b.lines.map(l => `<div class="q"><span class="ck"></span>${lineHtml(l)}</div>`).join('')}</div>`;
     case 'number':

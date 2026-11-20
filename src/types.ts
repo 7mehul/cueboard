@@ -173,8 +173,12 @@ export interface Packet {
 
 // ---------- output ----------
 
-export type BlockKind = 'header' | 'person' | 'keynotes' | 'questions' | 'number' | 'note' | 'trend' | 'bars' | 'timeline';
-export type Zone = 'top' | 'reference' | 'run' | 'numbers' | 'notes' | 'visual';
+export type BlockKind = 'header' | 'person' | 'keynotes' | 'phase' | 'questions' | 'number' | 'note' | 'trend' | 'bars' | 'timeline';
+export type Zone = 'top' | 'plan' | 'reference' | 'run' | 'numbers' | 'notes' | 'visual';
+// The parts a meeting runs through. Every plan opens and closes; in between the user mostly
+// listens and asks (learn) or mostly presents and answers (show), in whichever order suits.
+export type PhaseSlot = 'open' | 'learn' | 'show' | 'close';
+export const PHASE_SLOTS: PhaseSlot[] = ['open', 'learn', 'show', 'close'];
 export type GapKind = 'lookup' | 'ask' | 'confirm';
 
 export interface Line {
@@ -212,6 +216,8 @@ export interface Block {
   subjectId?: string;
   metricId?: string;
   why?: string; // why this block is on the board, when the model ranked it
+  phase?: PhaseSlot; // a phase block's own slot; on any other block, the phase it's needed in
+  minutes?: { from: number; to: number }; // a phase block's share of the meeting
   chart?: { prefix: string; suffix: string; points: ChartPoint[]; sourceIds: string[] };
   events?: TimelineEvent[];
 }

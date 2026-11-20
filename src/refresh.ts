@@ -7,7 +7,8 @@
 // - a card the user added is theirs; one they deleted stays deleted;
 // - a card the engine no longer draws goes, unless the user had changed it;
 // - a card the engine draws for the first time is added, clear of the others.
-// Position, size, colour and grouping are never the engine's to change once on the canvas.
+// Position, size, colour and grouping are never the engine's to change once on the canvas, with
+// one exception: when the plan's parts change order, cards the user hasn't moved follow their part.
 
 export type El = { id: string; type: string; x: number; y: number; w: number; h: number } & Record<string, unknown>;
 type Line = Record<string, unknown>;
@@ -66,7 +67,13 @@ export function mergeRefresh(current: El[], drafted: El[], next: El[]): Refreshe
       if (merged[k] === undefined) delete merged[k];
     }
     const m = merged as El;
-    if (content(m) !== content(e)) updated++;
+    // A new goal can reorder the plan. A card still in the column it was drafted in follows its
+    // part to the new column; one the user moved sideways stays where they put it.
+    const follows = e.x === was.x && now.x !== was.x;
+    if (follows) { m.x = now.x; m.y = now.y; }
+    const resized = e.w === was.w && now.w !== was.w; // likewise a width nobody changed
+    if (resized) m.w = now.w;
+    if (content(m) !== content(e) || follows || resized) updated++;
     if (touched) kept++;
     out.push(m);
   }

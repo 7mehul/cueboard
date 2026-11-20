@@ -6,7 +6,7 @@ import { makeCtx, warn } from './facts.ts';
 import type { Intel } from './facts.ts';
 import {
   barsBlock, commitmentLines, header, keynotes, metricInfos, noteBlocks,
-  numberBlocks, personCards, questionsBlock, timelineBlock, trendBlock,
+  numberBlocks, personCards, phaseBlocks, questionsBlock, timelineBlock, trendBlock,
 } from './compose.ts';
 import { layout } from './layout.ts';
 
@@ -55,15 +55,17 @@ export function buildBoard(p: Packet, o: EngineOptions = {}): Board {
   const bars = barsBlock(ctx);
   const promises = commitmentLines(ctx, 'timeline');
   const timeline = timelineBlock(ctx, promises);
-  const keys = keynotes(ctx, infos);
+  const keys = keynotes(ctx);
+  const plan = phaseBlocks(ctx, infos);
   const notes = noteBlocks(ctx, infos, timeline ? [] : promises, shownMetrics);
   const questions = questionsBlock(ctx);
 
-  let blocks = [head, keys, questions, ...people, ...numbers, ...notes, timeline, trend, bars]
+  let blocks = [head, keys, ...plan, questions, ...people, ...numbers, ...notes, timeline, trend, bars]
     .filter((b): b is Block => !!b);
 
   const max = o.maxBlocks ?? blockBudget(p.meeting.durationMin);
-  const body = blocks.filter(b => b.kind !== 'header');
+  // The header and the plan are the board's frame; the budget is for what hangs on it.
+  const body = blocks.filter(b => b.kind !== 'header' && b.kind !== 'phase');
   let dropped: string[] = [];
   if (body.length > max) {
     dropped = body
@@ -93,6 +95,6 @@ export function buildBoard(p: Packet, o: EngineOptions = {}): Board {
     rail,
     gaps,
     warnings: ctx.warnings,
-    budget: { max, used: blocks.length - 1, dropped },
+    budget: { max, used: blocks.filter(b => b.kind !== 'header' && b.kind !== 'phase').length, dropped },
   };
 }

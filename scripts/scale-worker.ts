@@ -50,6 +50,12 @@ function randomIntel(seed: number, packet: Parameters<typeof readPacket>[0]): In
       goal: { text: r.chance(0.1) ? '' : say(r.int(2, 25)), basis: r.pick(['stated', 'agreed_next_step', 'inferred'] as const), alternatives: [] },
       theyWant: [], decides: r.chance(0.3) ? [] : [say(r.int(1, 30))],
       opener: r.chance(0.3) ? '' : say(r.int(1, 25)), ask: r.chance(0.3) ? '' : say(r.int(1, 25)), risks: [], numbers: r.pick(['ours', 'theirs', 'both', 'none'] as const), needs: [], unknowns: [],
+      // A plan in the right shape half the time, nonsense the rest: slots repeated or made up, minutes negative.
+      ...(r.chance(0.3) ? {} : {
+        plan: r.chance(0.5)
+          ? ['open', ...(r.chance(0.5) ? ['learn', 'show'] : ['show', 'learn']).slice(0, r.int(1, 2)), 'close'].map(slot => ({ slot, name: say(r.int(1, 9)), minutes: r.int(1, 40), aim: say(r.int(0, 25)) }))
+          : Array.from({ length: r.int(0, 6) }, () => ({ slot: r.pick(['open', 'learn', 'show', 'close', 'nope']), name: say(r.int(0, 9)), minutes: r.int(0, 60) - 5, aim: say(r.int(0, 25)) })),
+      }),
     },
     rel: new Map(ids.filter(() => r.chance(0.7)).map(id => [id, { score: r.int(0, 3), why: say(4) }])),
     questions: Array.from({ length: r.int(0, 5) }, () => ({ text: say(r.int(1, 30)) + (r.chance(0.8) ? '?' : ''), why: say(3) })),

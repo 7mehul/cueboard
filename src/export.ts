@@ -97,7 +97,10 @@ function convert(b: Block, at: { x: number; y: number; w: number; h: number }, c
     case 'person':
       return [{ ...box, type: 'person', color: 'sky', name: b.title, lines: b.lines.map(line) }];
     case 'keynotes':
-      return [{ ...box, type: 'card', color: 'mint', tag: 'Key notes', title: 'Run of show', lines: b.lines.map(line) }];
+      return [{ ...box, type: 'card', color: 'mint', tag: 'Key notes', title: 'What this meeting is for', lines: b.lines.map(line) }];
+    // A part of the plan is an ordinary card: its minutes as the label, so they can be retimed by hand.
+    case 'phase':
+      return [{ ...box, type: 'card', color: 'lilac', tag: `${b.minutes?.from ?? 0}–${b.minutes?.to ?? 0} min`, title: b.title, lines: b.lines.map(line) }];
     case 'questions':
       return [{ ...box, type: 'list', title: b.title, items: b.lines.map(l => ({ text: l.text, done: false, ...(l.gap ? { gap: true } : {}), ...(l.memory ? { memory: true } : {}), ...cited([l]) })) }];
     case 'number': {

@@ -49,7 +49,7 @@ const cases: [string, () => Packet, (b: Board, p: Packet) => void][] = [
   ['delta_wrong', danaFollowup, b => { block(b, 'number:mrr').lines[1].text = 'was $39k · +24%'; }],
   ['delta_wrong', danaFirst, b => { block(b, 'number:mrr').lines[1].text = 'was $30k · +36%'; }],
   ['bad_news_hidden', danaFollowup, (_b, p) => { p.metrics.find(m => m.id === 'mrr')!.points.at(-1)!.value = 39000; }],
-  ['direction_wrong', danaFollowup, b => { const l = block(b, 'keynotes').lines.find(l => l.label === 'Open with')!; l.text = l.text.replace(' down ', ' up '); }],
+  ['direction_wrong', danaFollowup, b => { const l = block(b, 'phase:open').lines.find(l => l.label === 'Open with')!; l.text = l.text.replace(' down ', ' up '); }],
   ['missing_left_off', danaFollowup, b => { const k = block(b, 'keynotes'); k.lines = k.lines.filter(l => l.label !== 'Where we left off'); }],
   ['stage_wrong', danaFirst, b => { b.stage = 'followup'; }],
   ['timeline_in_first', danaFirst, b => {
@@ -65,6 +65,9 @@ const cases: [string, () => Packet, (b: Board, p: Packet) => void][] = [
   ['layout_missing', danaFirst, b => { b.canvas.pop(); }],
   ['rail_wrong', danaFirst, b => { b.rail.pop(); }],
   ['gaps_list_wrong', danaFirst, b => { b.gaps.push('[something else]'); }],
+  ['plan_shape', danaFirst, b => { b.blocks = b.blocks.filter(x => x.id !== 'phase:open'); b.canvas = b.canvas.filter(c => c.id !== 'phase:open'); b.rail = b.rail.filter(id => id !== 'phase:open'); }],
+  ['plan_minutes', danaFirst, b => { block(b, 'phase:close').minutes!.to += 5; }],
+  ['missing_ask_line', danaFirst, b => { const k = block(b, 'phase:close'); k.lines = k.lines.filter(l => l.label !== 'Ask'); }],
   ['missing_goal_line', danaFirst, b => { const k = block(b, 'keynotes'); k.lines = k.lines.filter(l => l.label !== 'Goal'); }],
   ['unresolved_not_flagged', danaFirst, (b, p) => {
     p.people[0].resolved = false;

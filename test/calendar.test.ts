@@ -21,10 +21,10 @@ test('meetings with someone from outside come in; the rest of a calendar doesn�
   const { memory: m, added } = sync(fresh());
   assert.deepEqual(added.map(id => titleOf(m, id)).sort(), ['Call with Maya (Larkspur)', 'Intro: Priya (Northwind) <> Alex', 'Larkspur partner meeting: Cueboard'],
     'not the internal sync, focus time, the declined coffee or the all-day offsite');
-  assert.deepEqual(m.people.map(p => `${p.name} <${p.email}>`).sort(), ['Ben Okoro <ben@larkspur.vc>', 'Maya Chen <maya@larkspur.vc>', 'Priya Raman <priya.raman@northwind.io>'],
+  assert.deepEqual(m.people.map(p => `${p.name} <${p.email}>`).sort(), ['Ben Okoro <ben@larkspur.example>', 'Maya Chen <maya@larkspur.example>', 'Priya Raman <priya.raman@northwind.example>'],
     'guests by address, named from it when the calendar has no name, never you');
   assert.ok(m.people.every(p => p.resolved), 'the calendar says who is invited');
-  assert.deepEqual(m.companies.map(c => `${c.name} (${c.domain})`).sort(), ['Larkspur (larkspur.vc)', 'Northwind (northwind.io)']);
+  assert.deepEqual(m.companies.map(c => `${c.name} (${c.domain})`).sort(), ['Larkspur (larkspur.example)', 'Northwind (northwind.example)']);
   const partner = m.meetings.find(x => x.title.startsWith('Larkspur'))!;
   assert.equal(partner.durationMin, 45);
   assert.equal(partner.calendar?.joinUrl, 'https://zoom.us/j/8812345678');
@@ -70,8 +70,8 @@ test('the calendar joins what you pasted instead of doubling it', () => {
   assert.equal(partner[0].id, 'mtg-pasted');
   assert.equal(partner[0].goal, 'Get to a term sheet', 'your goal stays');
   assert.equal(s.memory.people.filter(p => p.name === 'Maya Chen').length, 1, 'Maya, known by name, gets her address');
-  assert.equal(s.memory.people.find(p => p.name === 'Maya Chen')!.email, 'maya@larkspur.vc');
-  assert.deepEqual(s.memory.companies.map(c => `${c.name} (${c.domain ?? '—'})`).sort(), ['Larkspur Ventures (larkspur.vc)', 'Northwind (northwind.io)'], 'the pasted company gets its domain');
+  assert.equal(s.memory.people.find(p => p.name === 'Maya Chen')!.email, 'maya@larkspur.example');
+  assert.deepEqual(s.memory.companies.map(c => `${c.name} (${c.domain ?? '—'})`).sort(), ['Larkspur Ventures (larkspur.example)', 'Northwind (northwind.example)'], 'the pasted company gets its domain');
 });
 
 test('a board’s inputs change with what memory knows about the people coming, not about others', () => {
@@ -140,11 +140,11 @@ test('a first meeting from the calendar alone still makes a sound board', () => 
 });
 
 test('names, companies and descriptions are read sensibly', () => {
-  assert.equal(nameFromEmail('maya.chen@larkspur.vc'), 'Maya Chen');
-  assert.equal(nameFromEmail('ben+deals@x.com'), 'Ben');
-  assert.equal(companyFromDomain('larkspur.vc'), 'Larkspur');
+  assert.equal(nameFromEmail('maya.chen@larkspur.example'), 'Maya Chen');
+  assert.equal(nameFromEmail('ben+deals@x.example'), 'Ben');
+  assert.equal(companyFromDomain('larkspur.example'), 'Larkspur');
   assert.equal(companyFromDomain('go.acme.co.uk'), 'Acme');
-  assert.equal(companyFromDomain('northwind.io'), 'Northwind');
+  assert.equal(companyFromDomain('northwind.example'), 'Northwind');
   assert.equal(cleanDescription('<p>Agenda:</p><ul><li>Pilot scope</li><li>Pricing</li></ul>Join with Google Meet: https://meet.google.com/x'), 'Agenda:\nPilot scope\nPricing');
   assert.equal(cleanDescription(undefined), '');
 });

@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { splitMinutes } from '../src/playbooks.ts';
 import assert from 'node:assert/strict';
 import { buildBoard } from '../src/engine.ts';
 import { checkBoard } from '../src/check.ts';
@@ -35,9 +36,10 @@ test('follow-up: where you left off, changes since you last spoke, promises', ()
   clean(b, p);
   assert.equal(b.stage, 'followup');
   const keys = blk(b, 'keynotes')!.lines;
-  assert.deepEqual(keys.map(l => l.label), ['Where we left off', 'Goal', 'Open with', 'Ask']);
+  assert.deepEqual(keys.map(l => l.label), ['Where we left off', 'Goal']);
   assert.ok(keys[0].memory);
-  assert.equal(keys[2].text, 'SMB churn down 22% since Sep 16', 'opens with the number she asked about');
+  assert.equal(blk(b, 'phase:open')!.lines[0].text, 'SMB churn down 22% since Sep 16', 'opens with the number she asked about');
+  assert.equal(blk(b, 'phase:close')!.lines[0].label, 'Ask');
   assert.equal(blk(b, 'number:mrr')!.lines[1].text, 'was $40.8k · +18%');
   const tl = blk(b, 'timeline')!;
   assert.equal(tl.events!.length, 5);
@@ -96,7 +98,7 @@ test('a number that got worse since you shared it is marked and prepared for', (
   clean(b, p);
   assert.equal(blk(b, 'number:mrr')!.lines[1].tone, 'bad');
   assert.ok(blk(b, 'note:worse:mrr'));
-  assert.ok(!/MRR up/.test(blk(b, 'keynotes')!.lines.find(l => l.label === 'Open with')!.text), 'never opens with bad news');
+  assert.ok(!/MRR up/.test(blk(b, 'phase:open')!.lines.find(l => l.label === 'Open with')!.text), 'never opens with bad news');
 });
 
 // ---------- visuals and budget ----------
@@ -216,4 +218,34 @@ test('exported lines say where they came from, and only from their own sources',
   // Suggested and unknown lines have no source to show.
   for (const e of out.elements) if ('lines' in e) for (const l of e.lines) if (l.suggested || l.gap) assert.equal(l.cite, undefined);
   assert.equal(JSON.stringify(toCanvas(b)).includes('"cite"'), false, 'without the packet, nothing is cited');
+});
+
+test('the plan: the meeting in order, minute for minute, with everything under the part it’s needed in', () => {
+  const p = danaFollowup();
+  const b = buildBoard(p);
+  const plan = b.blocks.filter(x => x.kind === 'phase');
+  assert.deepEqual(plan.map(x => [x.phase, x.title]), [['open', 'Catch up'], ['show', 'Progress'], ['learn', 'Their concerns'], ['close', 'Next step']]);
+  assert.equal(plan[0].minutes!.from, 0);
+  plan.forEach((x, i) => { if (i) assert.equal(x.minutes!.from, plan[i - 1].minutes!.to); });
+  assert.equal(plan.at(-1)!.minutes!.to, p.meeting.durationMin);
+  // Columns follow the plan: people under the opening, numbers where you present, questions where you listen.
+  const at = new Map(b.canvas.map(c => [c.id, c]));
+  const col = (id: string) => at.get(id)!.x;
+  for (const x of b.blocks) {
+    if (x.kind === 'person') assert.equal(col(x.id), col('phase:open'), x.id);
+    if (x.kind === 'number') assert.equal(col(x.id), col('phase:show'), x.id);
+    if (x.kind === 'questions') assert.equal(col(x.id), col('phase:learn'), x.id);
+  }
+  assert.equal(at.get('keynotes')!.w, at.get('header')!.w, 'the goal runs across the top');
+  assert.ok(b.rail.indexOf('phase:open') < b.rail.indexOf('phase:close'));
+});
+
+test('minutes always add up, in fives for long meetings', () => {
+  assert.deepEqual(splitMinutes(30, [10, 40, 30, 20]), [3, 12, 9, 6]);
+  assert.deepEqual(splitMinutes(60, [10, 40, 30, 20]), [5, 25, 20, 10]);
+  for (const d of [1, 5, 15, 25, 45, 50, 90]) {
+    const m = splitMinutes(d, [15, 30, 35, 20]);
+    assert.equal(m.reduce((a, c) => a + c, 0), Math.max(4, d), String(d));
+    assert.ok(m.every(v => v >= 1));
+  }
 });

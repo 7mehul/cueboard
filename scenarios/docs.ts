@@ -8,7 +8,7 @@ import type { UserProfile } from '../src/types.ts';
 // fake model) and what any correct reading must contain (for scoring a real model).
 
 export const STORY_USER: UserProfile = {
-  name: 'Alex Rivera', email: 'alex@cueboard.app', role: 'Founder & CEO', persona: 'founder', company: 'Cueboard',
+  name: 'Alex Rivera', email: 'alex@cueboard.example', role: 'Founder & CEO', persona: 'founder', company: 'Cueboard',
   objectives: ['Raise a $3M seed round by December'],
 };
 
@@ -23,7 +23,7 @@ export const STORY: StoryDoc[] = [
       text: `Cueboard <> Larkspur Ventures
 Thursday, October 8, 2026 · 10:00 – 10:30 (America/New_York)
 Google Meet: meet.google.com/xqv-hmta-pwe
-Guests: Maya Chen <maya@larkspur.vc>, Alex Rivera <alex@cueboard.app>
+Guests: Maya Chen <maya@larkspur.example>, Alex Rivera <alex@cueboard.example>
 
 Intro call. Sam Patel connected us. Maya leads seed investments in workflow software.`,
     },
@@ -31,8 +31,8 @@ Intro call. Sam Patel connected us. Maya leads seed investments in workflow soft
       ...none,
       summary: 'Invite to the intro call with Maya',
       meeting: { title: 'Cueboard <> Larkspur Ventures', startsAt: '2026-10-08T10:00:00-04:00', durationMin: 30, attendeeRefs: ['p1'], goal: null },
-      people: [{ ref: 'p1', knownId: null, name: 'Maya Chen', email: 'maya@larkspur.vc', companyRef: 'c1' }],
-      companies: [{ ref: 'c1', knownId: null, name: 'Larkspur Ventures', domain: 'larkspur.vc' }],
+      people: [{ ref: 'p1', knownId: null, name: 'Maya Chen', email: 'maya@larkspur.example', companyRef: 'c1' }],
+      companies: [{ ref: 'c1', knownId: null, name: 'Larkspur Ventures', domain: 'larkspur.example' }],
       facts: [{ about: 'p1', topic: 'role', text: 'Leads seed investments in workflow software', quote: 'Maya leads seed investments in workflow software' }],
     },
     expect: [{ kind: 'meeting', match: /larkspur/i }, { kind: 'person', match: /maya chen/i }],
@@ -40,13 +40,13 @@ Intro call. Sam Patel connected us. Maya leads seed investments in workflow soft
   {
     doc: {
       id: 'd2', kind: 'email', date: '2026-10-02',
-      text: `From: Sam Patel <sam@patel.co>
-To: Maya Chen <maya@larkspur.vc>, Alex Rivera <alex@cueboard.app>
+      text: `From: Sam Patel <sam@patel.example>
+To: Maya Chen <maya@larkspur.example>, Alex Rivera <alex@cueboard.example>
 Subject: Intro: Alex (Cueboard) <> Maya (Larkspur)
 
 Maya, meet Alex. Alex is building Cueboard, meeting prep boards for founders and sales teams. They've grown MRR from $12k in May to $31k in September with no paid marketing.
 
-Alex, Maya is a partner at Larkspur and led the seed rounds for Fieldwork and Tally. She's been looking at tools that sit on top of the calendar.
+Alex, Maya is a partner at Larkspur and led the seed rounds for Fieldwork and Loomwise. She's been looking at tools that sit on top of the calendar.
 
 I'll let you two take it from here.
 Sam`,
@@ -56,13 +56,13 @@ Sam`,
       summary: 'Sam Patel’s intro email to Maya',
       happened: { kind: 'intro', date: '2026-10-02', summary: 'Sam Patel introduced you to Maya', peopleRefs: ['p1', 'p2'], quote: 'Maya, meet Alex.' },
       people: [
-        { ref: 'p1', knownId: 'KNOWN:maya', name: 'Maya Chen', email: 'maya@larkspur.vc', companyRef: 'c1' },
-        { ref: 'p2', knownId: null, name: 'Sam Patel', email: 'sam@patel.co', companyRef: null },
+        { ref: 'p1', knownId: 'KNOWN:maya', name: 'Maya Chen', email: 'maya@larkspur.example', companyRef: 'c1' },
+        { ref: 'p2', knownId: null, name: 'Sam Patel', email: 'sam@patel.example', companyRef: null },
       ],
       companies: [{ ref: 'c1', knownId: 'KNOWN:larkspur', name: 'Larkspur Ventures', domain: null }],
       facts: [
         { about: 'p1', topic: 'connection', text: 'Intro via Sam Patel', quote: 'Maya, meet Alex.' },
-        { about: 'p1', topic: 'background', text: 'Led the seed rounds for Fieldwork and Tally', quote: 'led the seed rounds for Fieldwork and Tally' },
+        { about: 'p1', topic: 'background', text: 'Led the seed rounds for Fieldwork and Loomwise', quote: 'led the seed rounds for Fieldwork and Loomwise' },
         { about: 'p1', topic: 'interest', text: 'Looking at tools that sit on top of the calendar', quote: 'looking at tools that sit on top of the calendar' },
       ],
       numbers: [
@@ -124,8 +124,8 @@ Sam`,
   {
     doc: {
       id: 'd4', kind: 'email', date: '2026-10-09',
-      text: `From: Alex Rivera <alex@cueboard.app>
-To: Maya Chen <maya@larkspur.vc>
+      text: `From: Alex Rivera <alex@cueboard.example>
+To: Maya Chen <maya@larkspur.example>
 Subject: Cueboard cohort table
 
 Hi Maya,
@@ -139,7 +139,7 @@ Alex`,
       ...none,
       summary: 'Your email to Maya with the cohort table',
       happened: { kind: 'email', date: '2026-10-09', summary: 'You sent Maya the cohort table', peopleRefs: ['p1'], quote: 'As promised, the cohort table is attached.' },
-      people: [{ ref: 'p1', knownId: 'KNOWN:maya', name: 'Maya Chen', email: 'maya@larkspur.vc', companyRef: null }],
+      people: [{ ref: 'p1', knownId: 'KNOWN:maya', name: 'Maya Chen', email: 'maya@larkspur.example', companyRef: null }],
       numbers: [{ owner: 'self', label: 'Small-team churn', value: 2.6, prefix: '', suffix: '%', asOf: '2026-10-09', better: 'down', sharedWith: ['p1'], quote: 'Small-team churn has come down to 2.6% in October.' }],
       kept: [{ promiseId: 'KNOWN:cohort', quote: 'As promised, the cohort table is attached.' }],
     },
@@ -151,7 +151,7 @@ Alex`,
       text: `Larkspur partner meeting: Cueboard
 Thursday, October 22, 2026 · 11:00 – 11:45 (America/New_York)
 Zoom: https://zoom.us/j/8812345678
-Guests: Maya Chen <maya@larkspur.vc>, Ben Okoro <ben@larkspur.vc>, Alex Rivera <alex@cueboard.app>
+Guests: Maya Chen <maya@larkspur.example>, Ben Okoro <ben@larkspur.example>, Alex Rivera <alex@cueboard.example>
 
 Partner meeting. Please bring the cohort data and your plan for the round.`,
     },
@@ -160,11 +160,11 @@ Partner meeting. Please bring the cohort data and your plan for the round.`,
       summary: 'Invite to the Larkspur partner meeting',
       meeting: { title: 'Larkspur partner meeting: Cueboard', startsAt: '2026-10-22T11:00:00-04:00', durationMin: 45, attendeeRefs: ['p1', 'p2'], goal: null },
       people: [
-        { ref: 'p1', knownId: 'KNOWN:maya', name: 'Maya Chen', email: 'maya@larkspur.vc', companyRef: 'c1' },
-        { ref: 'p2', knownId: 'KNOWN:ben', name: 'Ben Okoro', email: 'ben@larkspur.vc', companyRef: 'c1' },
+        { ref: 'p1', knownId: 'KNOWN:maya', name: 'Maya Chen', email: 'maya@larkspur.example', companyRef: 'c1' },
+        { ref: 'p2', knownId: 'KNOWN:ben', name: 'Ben Okoro', email: 'ben@larkspur.example', companyRef: 'c1' },
       ],
-      companies: [{ ref: 'c1', knownId: 'KNOWN:larkspur', name: 'Larkspur Ventures', domain: 'larkspur.vc' }],
-      kept: [{ promiseId: 'KNOWN:intro-ben', quote: 'Ben Okoro <ben@larkspur.vc>' }],
+      companies: [{ ref: 'c1', knownId: 'KNOWN:larkspur', name: 'Larkspur Ventures', domain: 'larkspur.example' }],
+      kept: [{ promiseId: 'KNOWN:intro-ben', quote: 'Ben Okoro <ben@larkspur.example>' }],
     },
     expect: [{ kind: 'meeting', match: /partner/i }],
   },

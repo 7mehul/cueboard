@@ -1,5 +1,5 @@
 import * as z from 'zod/v4';
-import { FACT_TOPICS, MEETING_TYPES } from '../types.ts';
+import { FACT_TOPICS, MEETING_TYPES, PHASE_SLOTS } from '../types.ts';
 import { LIMITS } from '../text.ts';
 
 // What the model returns at each step. Kept small and concrete so any capable model can fill it.
@@ -29,6 +29,12 @@ export const MeetingBrief = z.object({
     why: z.string(),
   })).describe('The information the user must have in front of them, most important first, specific to this meeting'),
   unknowns: z.array(z.string()).describe('Things not in the context that block the goal and should be asked or looked up'),
+  plan: z.array(z.object({
+    slot: z.enum(PHASE_SLOTS as [string, ...string[]]).describe('open = hellos and framing; learn = the user mostly asks and listens; show = the user mostly presents or answers; close = agreeing what happens next'),
+    name: z.string().describe('What this part is called on the board, 1 to 3 words specific to this meeting: "Their SSO blocker"'),
+    minutes: z.number().int().describe('Minutes for this part; all parts add up to the meeting length'),
+    aim: z.string().describe(`For learn and show: the one thing to get done in this part, as an instruction to the user, ${BOARD_LINE}. "" for open and close`),
+  })).optional().describe('How the meeting should run to reach the goal: 3 or 4 parts in order, starting with open and ending with close, each slot used once'),
 });
 export type MeetingBrief = z.infer<typeof MeetingBrief>;
 

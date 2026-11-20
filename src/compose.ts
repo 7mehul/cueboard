@@ -1,4 +1,7 @@
-import type { Block, BlockKind, Disclosure, Fact, FactTopic, GapKind, Line, Metric, MetricPoint, TimelineEvent } from './types.ts';
+import type { Block, BlockKind, Disclosure, Fact, FactTopic, GapKind, Line, Metric, MetricPoint, PhaseSlot, TimelineEvent } from './types.ts';
+import { PHASE_SLOTS } from './types.ts';
+import type { PhaseDef } from './playbooks.ts';
+import { splitMinutes } from './playbooks.ts';
 import type { Ctx } from './facts.ts';
 import { blend, bump, isMemory, knows, relOf, score, validSources, warn, whyOf } from './facts.ts';
 import type { Limit } from './text.ts';
@@ -147,7 +150,7 @@ export function personCards(ctx: Ctx): Block[] {
       if (l) lines.push(l);
     }
     return {
-      id: `person:${person.id}`, kind, zone: 'reference', slot: 'person',
+      id: `person:${person.id}`, kind, zone: 'reference', slot: 'person', phase: 'open',
       priority: pb.priority.person + i * 40, required: i === 0, color: 'sky',
       title: fit(ctx, person.name, LIMITS.title), lines, subjectId: person.id,
       ...(whyOf(ctx, `p:${person.id}`) ? { why: whyOf(ctx, `p:${person.id}`) } : {}),
@@ -251,7 +254,7 @@ export function numberBlocks(ctx: Ctx, infos: NumberInfo[]): Block[] {
     const note = numberNote(ctx, n);
     if (note) lines.push(note);
     return {
-      id: `number:${n.m.id}`, kind: 'number', zone: 'numbers', slot: 'number',
+      id: `number:${n.m.id}`, kind: 'number', zone: 'numbers', slot: 'number', phase: 'show',
       priority: pb.priority.number + i * pb.step, title: fit(ctx, n.m.label, LIMITS.title), lines, metricId: n.m.id,
       ...(whyOf(ctx, `m:${n.m.id}`) ? { why: whyOf(ctx, `m:${n.m.id}`) } : {}),
     };
@@ -410,7 +413,7 @@ function suggestion(ctx: Ctx, kind: BlockKind, text: string | undefined, o: Line
   return l;
 }
 
-export function keynotes(ctx: Ctx, infos: NumberInfo[]): Block {
+export function keynotes(ctx: Ctx): Block {
   const { p, pb, fr } = ctx;
   const kind: BlockKind = 'keynotes';
   const lines: (Line | null)[] = [];
@@ -421,7 +424,14 @@ export function keynotes(ctx: Ctx, infos: NumberInfo[]): Block {
   }
   const goal = p.meeting.goal?.trim();
   const brief = ctx.intel?.brief;
-  if (goal) lines.push(plain(ctx, kind, 0, goal, { label: 'Goal', dedupe: false }));
+  if (goal) {
+    // The user's own words. Said in a couple of sentences, the board shows a line of it: the
+    // model's shortening when there is one, else its first whole clause.
+    const short = !fits(goal, lineLimit(kind, 0)) && brief?.goal.basis === 'stated' && brief.goal.text.trim() ? brief.goal.text.trim() : goal;
+    const r = fitClause(short.replace(/(?<!\.)\.$/, ''), lineLimit(kind, 0));
+    if (r.trimmed) bump(ctx, 'trimmed');
+    lines.push(plain(ctx, kind, 0, r.text, { label: 'Goal', dedupe: false }));
+  }
   else if (brief?.goal.text.trim()) {
     warn(ctx, 'goal_suggested', `Goal suggested from ${brief.goal.basis === 'agreed_next_step' ? 'the agreed next step' : 'what’s known'}; confirm it`);
     lines.push(suggestion(ctx, kind, brief.goal.text, { label: 'Goal', dedupe: false }));
@@ -433,15 +443,54 @@ export function keynotes(ctx: Ctx, infos: NumberInfo[]): Block {
   const goalLine = lines.at(-1);
   if (goalLine && !goalLine.gap) ctx.seenText.add(normalize(goalLine.text));
   lines.push(suggestion(ctx, kind, brief?.decides.find(d => d.trim()), { label: 'What decides it' }));
-  lines.push(opener(ctx, infos));
-  const ask = selfFact(ctx, 'ask');
-  lines.push((ask && factLine(ctx, kind, 0, ask, { label: 'Ask' }))
-    || suggestion(ctx, kind, brief?.ask, { label: 'Ask' })
-    || gap(ctx, kind, 0, brief ? 'the next step you’ll ask for' : pb.askHint, 'confirm', { label: 'Ask', dedupe: false }));
   return {
     id: 'keynotes', kind, zone: 'run', slot: 'keynotes', priority: pb.priority.keynotes, required: true, color: 'mint',
     title: 'Key notes', lines: lines.filter((l): l is Line => !!l),
   };
+}
+
+// ---------- the plan ----------
+
+// How the meeting should run: three or four parts in order, each with its minutes. The first
+// carries what to open with and the last the ask; a model's plan adds what to get done in the
+// parts between. Everything else on the board sits under the part it's needed in.
+function planFor(ctx: Ctx): { defs: PhaseDef[]; aims: Map<PhaseSlot, string>; fromModel: boolean } {
+  const raw = ctx.intel?.brief?.plan ?? [];
+  const seen = new Set<string>();
+  const ok = raw.length >= 3 && raw.length <= 4 && raw[0].slot === 'open' && raw.at(-1)!.slot === 'close' &&
+    raw.every(x => (PHASE_SLOTS as string[]).includes(x.slot) && !seen.has(x.slot) && !!seen.add(x.slot) && x.name?.trim() && x.minutes > 0);
+  if (!ok) return { defs: ctx.pb.plan, aims: new Map(), fromModel: false };
+  return {
+    defs: raw.map(x => ({ slot: x.slot as PhaseSlot, name: x.name.trim(), share: x.minutes })),
+    aims: new Map(raw.filter(x => x.aim?.trim()).map(x => [x.slot as PhaseSlot, x.aim])),
+    fromModel: true,
+  };
+}
+
+export function phaseBlocks(ctx: Ctx, infos: NumberInfo[]): Block[] {
+  const { p, pb } = ctx;
+  const kind: BlockKind = 'phase';
+  const brief = ctx.intel?.brief;
+  const { defs, aims, fromModel } = planFor(ctx);
+  if (!fromModel && brief?.plan?.length) warn(ctx, 'plan_fallback', 'The suggested plan didn’t add up, so the usual one for this kind of meeting is used');
+  const mins = splitMinutes(p.meeting.durationMin, defs.map(d => d.share));
+  let at = 0;
+  return defs.map((d, i) => {
+    const lines: (Line | null)[] = [];
+    if (d.slot === 'open') lines.push(opener(ctx, infos));
+    else if (d.slot === 'close') {
+      const ask = selfFact(ctx, 'ask');
+      lines.push((ask && factLine(ctx, kind, 0, ask, { label: 'Ask' }))
+        || suggestion(ctx, kind, brief?.ask, { label: 'Ask' })
+        || gap(ctx, kind, 0, brief ? 'the next step you’ll ask for' : pb.askHint, 'confirm', { label: 'Ask', dedupe: false }));
+    } else lines.push(suggestion(ctx, kind, aims.get(d.slot), {}));
+    const minutes = { from: at, to: at + mins[i] };
+    at = minutes.to;
+    return {
+      id: `phase:${d.slot}`, kind, zone: 'plan', slot: 'phase', priority: -1, required: true, color: 'lilac',
+      title: fit(ctx, d.name, LIMITS.title), lines: lines.filter((l): l is Line => !!l), phase: d.slot, minutes,
+    };
+  });
 }
 
 // ---------- quick notes ----------
@@ -455,7 +504,7 @@ const TOPIC_TITLES: Record<FactTopic, string> = {
 // The same topics, when the fact is about the user's own side.
 const SELF_TITLES: Partial<Record<FactTopic, string>> = { fund: 'Your fund', portfolio: 'Your portfolio', company: 'About you', news: 'Your news' };
 
-interface NoteCand { key: string; rel?: string; title: string; color: Block['color']; build: () => Line[] }
+interface NoteCand { key: string; rel?: string; title: string; color: Block['color']; phase: PhaseSlot; build: () => Line[] }
 
 export function noteBlocks(ctx: Ctx, infos: NumberInfo[], promises: Line[], shownMetrics: Set<string>): Block[] {
   const { p, pb, fr } = ctx;
@@ -463,15 +512,16 @@ export function noteBlocks(ctx: Ctx, infos: NumberInfo[], promises: Line[], show
   const start = ms(p.meeting.startsAt);
   const one = (l: Line | null) => (l ? [l] : []);
 
+  // A concern they raised is theirs to talk through; one you often hear is answered as you present.
   const objection = (o: (typeof p.objections)[number]): NoteCand => ({
-    key: `obj:${o.id}`, rel: `o:${o.id}`, title: o.text, color: 'rose',
+    key: `obj:${o.id}`, rel: `o:${o.id}`, title: o.text, color: 'rose', phase: o.raisedBy ? 'learn' : 'show',
     build: () => {
       const a = o.answer?.trim() ? claim(ctx, kind, 0, o.answer, o.sourceIds) : null;
       return one(a ?? gap(ctx, kind, 0, 'your answer to this', 'confirm', { dedupe: false }));
     },
   });
-  const fromFact = (f: Fact, title: string, color: Block['color']): NoteCand => ({
-    key: `fact:${f.id}`, rel: f.id, title, color, build: () => one(factLine(ctx, kind, 0, f)),
+  const fromFact = (f: Fact, title: string, color: Block['color'], phase: PhaseSlot): NoteCand => ({
+    key: `fact:${f.id}`, rel: f.id, title, color, phase, build: () => one(factLine(ctx, kind, 0, f)),
   });
 
   const worse: NoteCand[] = infos.filter(n => n.worse && n.disc)
@@ -481,12 +531,12 @@ export function noteBlocks(ctx: Ctx, infos: NumberInfo[], promises: Line[], show
     // Worse can mean up (burn, churn) or down (revenue), so say which way it actually moved.
     const dir = n.latest.value > n.disc!.value ? 'up' : 'down';
     return {
-      key: `worse:${n.m.id}`, title: `${n.m.label} is ${dir}`, color: 'rose',
+      key: `worse:${n.m.id}`, title: `${n.m.label} is ${dir}`, color: 'rose', phase: 'show' as PhaseSlot,
       build: () => one(claim(ctx, kind, 0, `${n.m.label} was ${fmtValue(n.disc!.value, n.m.prefix, n.m.suffix)} on ${shortDate(n.disc!.date)}. Have the reason ready.`,
         [n.latest.sourceId, n.disc!.sourceId])),
     };
   });
-  const promise: NoteCand[] = promises.length ? [{ key: 'promises', title: 'Promises', color: 'yellow', build: () => promises }] : [];
+  const promise: NoteCand[] = promises.length ? [{ key: 'promises', title: 'Promises', color: 'yellow', phase: 'open', build: () => promises }] : [];
   const raised = p.objections
     .filter(o => o.raisedBy && fr.resolvedIds.has(o.raisedBy) && !o.resolved && (!o.raisedAt || (isDate(o.raisedAt) && ms(o.raisedAt) < start)))
     .map(objection);
@@ -495,24 +545,24 @@ export function noteBlocks(ctx: Ctx, infos: NumberInfo[], promises: Line[], show
     .map(objection);
   const avoid = ctx.facts
     .filter(f => f.topic === 'avoid' && (f.subject.kind === 'self' || (f.subject.kind === 'person' && fr.resolvedIds.has(f.subject.id))))
-    .map(f => fromFact(f, 'Don’t repeat', 'yellow'));
+    .map(f => fromFact(f, 'Don’t repeat', 'yellow', 'show'));
   const companies = new Set(fr.attendees.filter(a => a.resolved).map(a => a.companyId).filter(Boolean));
   const since = fr.lastMeeting ? ms(fr.lastMeeting.date) : -Infinity;
   const news = ctx.facts
     .filter(f => f.topic === 'news' && f.subject.kind === 'company' && companies.has(f.subject.id) && ms(f.date!) > since)
     .sort((a, b) => ms(b.date!) - ms(a.date!) || a.id.localeCompare(b.id))
-    .map(f => fromFact(f, fr.stage === 'first' ? 'In the news' : 'New since last call', 'sky'));
+    .map(f => fromFact(f, fr.stage === 'first' ? 'In the news' : 'New since last call', 'sky', 'open'));
   const proof = ctx.facts
     .filter(f => f.subject.kind === 'self' && f.topic === 'proof' && (!f.meetingTypes || f.meetingTypes.includes(fr.type)))
     .sort((a, b) => b.confidence - a.confidence || a.id.localeCompare(b.id))
-    .map(f => fromFact(f, 'Proof point', 'mint'));
+    .map(f => fromFact(f, 'Proof point', 'mint', 'show'));
 
   // Facts the model rated must-have that have no other slot get a note of their own,
   // e.g. an investor's portfolio company that competes with the startup they're meeting.
   const placed = new Set([...news, ...proof, ...avoid].map(c => c.rel));
   const mustHave = ctx.intel ? ctx.facts
     .filter(f => relOf(ctx, f.id) === 3 && !placed.has(f.id) && !ctx.usedFacts.has(f.id))
-    .map(f => fromFact(f, (f.subject.kind === 'self' && SELF_TITLES[f.topic]) || TOPIC_TITLES[f.topic], f.topic === 'portfolio' || f.topic === 'decision' ? 'rose' : 'sky')) : [];
+    .map(f => fromFact(f, (f.subject.kind === 'self' && SELF_TITLES[f.topic]) || TOPIC_TITLES[f.topic], f.topic === 'portfolio' || f.topic === 'decision' ? 'rose' : 'sky', f.subject.kind === 'self' ? 'show' : 'learn')) : [];
   const soft = [...mustHave, ...(fr.stage === 'first' ? [...library, ...proof, ...news, ...avoid] : [...avoid, ...news, ...library, ...proof])];
   // Bad news, promises and objections they raised always lead; the model can't push them off.
   // The rest follow the model's ranking when there is one, and anything it scored 0 is left off.
@@ -532,7 +582,7 @@ export function noteBlocks(ctx: Ctx, infos: NumberInfo[], promises: Line[], show
     titles.add(normalize(title));
     const why = c.rel ? whyOf(ctx, c.rel) : undefined;
     blocks.push({
-      id: `note:${c.key}`, kind, zone: 'notes', slot: 'note',
+      id: `note:${c.key}`, kind, zone: 'notes', slot: 'note', phase: c.phase,
       priority: pb.priority.note + blocks.length * pb.step, color: c.color, title, lines, ...(why ? { why } : {}),
     });
   }
@@ -574,5 +624,5 @@ export function questionsBlock(ctx: Ctx): Block | null {
   for (const q of ordered) { if (full()) break; push(plain(ctx, kind, 0, q.text, q.gap ? { gap: 'ask' } : {})); }
 
   if (!lines.length) return null;
-  return { id: 'questions', kind, zone: 'run', slot: 'questions', priority: pb.priority.questions, title: 'Questions to ask', lines };
+  return { id: 'questions', kind, zone: 'run', slot: 'questions', phase: 'learn', priority: pb.priority.questions, title: 'Questions to ask', lines };
 }

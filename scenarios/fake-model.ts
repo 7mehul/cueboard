@@ -3,10 +3,12 @@ import { LLMError } from '../src/intel/llm.ts';
 import { scripted } from '../src/intel/providers/scripted.ts';
 import { toAnswer } from '../src/intel/schemas.ts';
 import { STORY, bindKnown } from './docs.ts';
+import { demoAnswer, demoBrief, demoRanking } from './demo.ts';
 
 // A stand-in model for trying the app without credentials (node scripts/serve.ts --fake-model).
-// It only knows the story documents in scenarios/docs.ts: paste one of those and it answers as a
-// good model would; anything else, and the meeting steps, fall back to the rules.
+// It only knows the story documents in scenarios/docs.ts and the demo week's (scenarios/demo.ts):
+// paste one of those and it answers as a good model would, and the demo week's meetings are read
+// with a goal and a plan; anything else falls back to the rules.
 
 // The ids memory gave the story's people and promises, read back from the prompt's KNOWN lists.
 function knownIn(prompt: string) {
@@ -17,11 +19,15 @@ function knownIn(prompt: string) {
 export function fakeModel(): LLM {
   const llm = scripted({
     extract: req => {
+      const d = demoAnswer(req.prompt);
+      if (d) return toAnswer(d);
       const s = STORY.find(x => req.prompt.includes(x.doc.text.trim()));
       if (!s) throw new LLMError('unavailable', 'The fake model only knows the sample documents');
       return toAnswer(bindKnown(s.ideal, knownIn(req.prompt)));
     },
-    understand: () => { throw new LLMError('unavailable', 'The fake model leaves the meeting to the rules'); },
+    // The demo week's meetings are read as a good model would; any other meeting is left to the rules.
+    understand: req => demoBrief(req.prompt) ?? (() => { throw new LLMError('unavailable', 'The fake model leaves this meeting to the rules'); })(),
+    rank: req => demoRanking(req.prompt) ?? (() => { throw new LLMError('unavailable', 'The fake model leaves this meeting to the rules'); })(),
   }, 'fake');
   // The board assistant gets a polite stand-in reply, so the panel can be tried end to end.
   return {

@@ -30,6 +30,7 @@ const RM = !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)'
 const narrow = () => window.matchMedia && matchMedia('(max-width: 760px)').matches;
 const Engine = window.CueEngine || null;
 
+const SOURCE_URL = 'https://github.com/7mehul/cueboard';
 const ICONS = {
   note: '<path d="M5 4h14v10l-5 6H5z"/><path d="M14 20v-6h5"/>',
   text: '<path d="M5 7V4.5h14V7M12 4.5V20M9 20h6"/>',
@@ -322,6 +323,8 @@ function normGen(g) {
   return {
     inputs: typeof g.inputs === 'string' ? g.inputs.slice(0, 64) : '', at: isFinite(num(g.at)) ? num(g.at) : 0,
     mode: g.mode === 'model' ? 'model' : 'rules', title: str(g.title, 120), auto: !!g.auto,
+    goals: (Array.isArray(g.goals) ? g.goals : []).filter(t => typeof t === 'string' && t.trim()).slice(0, 3).map(t => t.slice(0, 160)),
+    goalHint: str(g.goalHint, 120),
     els: g.els.slice(0, 400).map(e => normalizeEl(e, true)).filter(Boolean),
   };
 }
@@ -409,10 +412,13 @@ function zoomAt(sx, sy, f) {
   const v = S.view, z = clamp(v.z * f, ZMIN, ZMAX), k = z / v.z;
   setView({ z, x: sx - (sx - v.x) * k, y: sy - (sy - v.y) * k });
 }
+const GOAL = { el: null, edit: null, draft: '', busy: new Set() };
 function insets() {
   if (S.glance) return { t: gbar.offsetHeight + 12, b: gnote.offsetHeight + 32, l: 24, r: 24 };
   // The assistant floats over the board, so a fitted board stays clear of it.
-  return { t: 76, b: 100, l: 28, r: S.asOpen && !narrow() ? 28 + 396 : 28 };
+  // And of the goal bar, when a meeting's board is showing it.
+  const gb = GOAL.el && !GOAL.el.hidden ? GOAL.el.offsetHeight + 6 : 0;
+  return { t: 76 + gb, b: 100, l: 28, r: S.asOpen && !narrow() ? 28 + 396 : 28 };
 }
 function sizeOf(e) { const n = nodes.get(e.id); return { w: n ? n.offsetWidth : e.w, h: n ? n.offsetHeight : e.h }; }
 const RAD = Math.PI / 180;
@@ -1683,6 +1689,14 @@ window.addEventListener('pagehide', () => flush());
 
 /* ================= boards ================= */
 const curChat = () => (S.chats[S.boardId] = S.chats[S.boardId] || []);
+// A part of the plan is a card labelled with its minutes ("5–15 min"). Retime the label and the
+// window follows; the order is left to right, as the board reads.
+const PHASE_TAG = /^\s*(\d{1,3})\s*[–—-]\s*(\d{1,3})\s*min\b/i;
+function phaseCards(list) {
+  return (list || els()).filter(e => e.type === 'card' && PHASE_TAG.test(e.tag || ''))
+    .map(e => { const m = PHASE_TAG.exec(e.tag); return { e, from: +m[1], to: +m[2] }; })
+    .filter(x => x.to > x.from).sort((a, b) => a.from - b.from || a.e.x - b.e.x);
+}
 function switchBoard(id) {
   if (!S.boards[id]) return;
   exitPen();
@@ -1694,6 +1708,8 @@ function switchBoard(id) {
   const b = board();
   if (S.booted && b.meetingId) track('board_opened');
   if (b.reflow) requestAnimationFrame(() => { if (S.boardId !== b.id || !b.reflow) return; delete b.reflow; settle(true); scheduleSave(b.id); });
+  // The timer runs for as long as the plan does.
+  if (!T.running && !tElapsed()) { const parts = phaseCards(); if (parts.length > 1) { T.len = parts.at(-1).to; tRender(); } }
   // Brought up to date while you were elsewhere: say what changed, once.
   if (b.news) { toast(b.news); delete b.news; }
   if (b.settle) {
@@ -1752,7 +1768,7 @@ function updateChrome() {
   if (document.activeElement !== titleIn) titleIn.value = b.title;
   exChip.hidden = !b.example;
   gTitle.textContent = b.title;
-  updateNotesBtn();
+  updateNotesBtn(); updateGoalBar();
 }
 function relTime(t) {
   if (!t) return 'Not saved yet';
@@ -1788,6 +1804,7 @@ function openMenu(mode) {
     menu.append(h('hr'));
     menu.append(h('button', { class: 'menu-item', type: 'button', role: 'menuitem', onclick: () => { closeMenu(); newBoard(); } }, ic('plus'), h('span', { class: 'mi-main' }, h('span', { class: 'mi-title', text: 'New blank board' }))));
     if (Engine && Engine.todayModel) menu.append(h('button', { class: 'menu-item', type: 'button', role: 'menuitem', onclick: () => openToday() }, ic('calendar'), h('span', { class: 'mi-main' }, h('span', { class: 'mi-title', text: 'Today' }), h('span', { class: 'mi-sub', text: 'Your meetings and what’s ready' }))));
+    if (DEMO.on) menu.append(h('button', { class: 'menu-item', type: 'button', role: 'menuitem', onclick: () => openDemo() }, ic('spark'), h('span', { class: 'mi-main' }, h('span', { class: 'mi-title', text: 'Load the demo week…' }), h('span', { class: 'mi-sub', text: 'A founder’s week of meetings to explore' }))));
     if (Engine && Engine.granolaToDoc && granolaOffered()) menu.append(h('button', { class: 'menu-item', type: 'button', role: 'menuitem', onclick: () => openGranolaImport() }, ic('note'), h('span', { class: 'mi-main' }, h('span', { class: 'mi-title', text: 'Import from Granola…' }), h('span', { class: 'mi-sub', text: 'Your past meeting notes, into memory' }))));
     if (Engine && Engine.readDocuments) menu.append(h('button', { class: 'menu-item', type: 'button', role: 'menuitem', onclick: () => openSheet('prep') }, ic('note'), h('span', { class: 'mi-main' }, h('span', { class: 'mi-title', text: 'Prep from emails and notes…' }), h('span', { class: 'mi-sub', text: 'Paste the invite, emails, your notes' }))));
     const ahead = Mem.data && Engine && Engine.upcoming ? Engine.upcoming(Mem.data, new Date().toISOString()).filter(m => !Object.values(S.boards).some(b => b.meetingId === m.id)).slice(0, 5) : [];
@@ -1799,6 +1816,8 @@ function openMenu(mode) {
     if (Engine) menu.append(h('button', { class: 'menu-item', type: 'button', role: 'menuitem', onclick: () => openMenu('samples') }, ic('calendar'), h('span', { class: 'mi-main' }, h('span', { class: 'mi-title', text: 'New board from a meeting…' }), h('span', { class: 'mi-sub', text: 'Sample meetings until your calendar is connected' }))));
     if (!S.boards['b-example']) menu.append(h('button', { class: 'menu-item', type: 'button', role: 'menuitem', onclick: () => { closeMenu(); const ex = makeExample(); S.boards[ex.id] = ex; switchBoard(ex.id); } }, ic('spark'), h('span', { class: 'mi-main' }, h('span', { class: 'mi-title', text: 'Open the example board' }))));
     menu.append(h('button', { class: 'menu-item', type: 'button', role: 'menuitem', onclick: () => openMenu('delete') }, ic('trash'), h('span', { class: 'mi-main' }, h('span', { class: 'mi-title', text: 'Delete this board…' }))));
+    // AGPL-3.0: whoever runs Cueboard for others offers them its source. Point this at your fork if you change it.
+    menu.append(h('a', { class: 'menu-src', href: SOURCE_URL, target: '_blank', rel: 'noopener noreferrer' }, 'Source code · AGPL-3.0'));
   }
   menu.hidden = false; $('#b-menu').setAttribute('aria-expanded', 'true');
 }
@@ -1993,6 +2012,7 @@ async function loadMemory() {
   if (Store.mode === 'db' && Store.col) { try { const d = await Store.col.doc('memory').get(); if (d.exists) raw = d.data(); } catch (_) { } }
   if (!raw) { try { const t = localStorage.getItem(MEM_KEY); if (t) raw = JSON.parse(t); } catch (_) { } }
   Mem.data = Engine && Engine.reviveMemory ? Engine.reviveMemory(raw, 'me') : null;
+  if (S.boardId) updateGoalBar(); // the board on screen may be a meeting's, now that memory says so
   return Mem.data;
 }
 async function saveMemory() {
@@ -2089,7 +2109,7 @@ function sheetYou() {
   };
   sheetFrame('About you', 'Asked once. It decides whose numbers are whose and what a good outcome looks like for you.',
     h('div', { class: 'sh-grid' },
-      f('you-name', 'Your name', u.name, 'Alex Rivera'), f('you-email', 'Your email', u.email, 'alex@company.com', 'email'),
+      f('you-name', 'Your name', u.name, 'Alex Rivera'), f('you-email', 'Your email', u.email, 'alex@company.example', 'email'),
       f('you-role', 'Your role', u.role, 'Founder & CEO'), f('you-company', 'Company', u.company, 'Cueboard'),
       h('label', { class: 'sh-field wide', for: 'you-goals' }, h('span', { text: 'What you’re working toward, one per line' }), goals), err),
     [h('button', { class: 'btn', type: 'button', onclick: closeSheet }, 'Cancel'), h('button', { class: 'btn primary', type: 'button', onclick: save }, 'Continue')]);
@@ -2213,9 +2233,28 @@ function sheetReview() {
       who: [...sessionPeople].map(([id, p]) => { const cb = h('input', { type: 'checkbox', checked: coming.has(id), 'data-who': id }); return h('label', { class: 'rv-chip' }, cb, p.name); }),
       goal: h('input', { class: 'in', value: pm && pm.goal ? pm.goal : '', placeholder: 'Optional: what you want out of it', 'aria-label': 'Goal' }),
     };
-    body.push(h('section', { class: 'rv-sec' }, h('h3', { text: pm ? 'The meeting' : 'Which meeting is this for?' }),
+    const form = h('div', { class: 'rv-form' },
       h('div', { class: 'rv-meeting' }, mf.title, h('div', { class: 'rv-when' }, mf.when, mf.len, h('span', { class: 'rv-meta', text: 'min' })), mf.goal),
-      mf.who.length ? h('div', { class: 'rv-coming' }, h('span', { class: 'rv-meta', text: 'Who’s coming' }), mf.who) : null));
+      mf.who.length ? h('div', { class: 'rv-coming' }, h('span', { class: 'rv-meta', text: 'Who’s coming' }), mf.who) : null);
+    // No invite in the paste: the meetings memory already has with these people come first.
+    const ids = new Set(sessionPeople.keys());
+    const ahead = pm ? [] : Engine.upcoming(Mem.data, new Date().toISOString()).filter(m => m.attendeeIds.some(id => ids.has(id))).slice(0, 4);
+    R.target = ahead.length ? ahead[0].id : 'new';
+    let choose = null;
+    if (ahead.length) {
+      const pick = v => { R.target = v; form.hidden = v !== 'new'; };
+      const opt = (v, label, meta) => {
+        const r = h('input', { type: 'radio', name: 'rv-target', value: v, checked: R.target === v });
+        r.addEventListener('change', () => pick(v));
+        return h('label', { class: 'rv-row rv-pick' }, r, h('span', { class: 'rv-main' }, h('span', { class: 'rv-text', text: label }), meta ? h('span', { class: 'rv-meta', text: meta }) : null));
+      };
+      const when = m => new Date(m.startsAt).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+      choose = h('div', { class: 'rv-picks' },
+        ahead.map(m => opt(m.id, m.title, when(m))),
+        opt('new', 'A different meeting…'), opt('none', 'No meeting: just remember it'));
+      form.hidden = true;
+    }
+    body.push(h('section', { class: 'rv-sec' }, h('h3', { text: pm ? 'The meeting' : 'Which meeting is this for?' }), choose, form));
   }
   // What each document said
   read.forEach((r, i) => {
@@ -2249,7 +2288,8 @@ function sheetReview() {
     const items = new Set([...sheet.querySelectorAll('[data-item]')].filter(c => c.checked).map(c => c.dataset.item));
     const choices = read.map(r => r.proposal ? { people: r.proposal.people.filter(p => accepted.has(pid(r, p))).map(p => p.ref), items: r.proposal.items.map(x => x.id).filter(id => items.has(id)) } : { people: [], items: [] });
     let meeting = null;
-    if (mf) {
+    const target = mf && R.target && R.target !== 'new' ? R.target : null;
+    if (mf && !target) {
       const t = mf.title.value.trim(), when = new Date(mf.when.value);
       if (!t || isNaN(when)) { err.textContent = 'Give the meeting a title and a time, so the board knows when it is.'; err.hidden = false; return; }
       meeting = Object.assign({ title: t, startsAt: when.toISOString(), durationMin: clamp(Math.round(+mf.len.value || 30), 5, 600),
@@ -2262,6 +2302,7 @@ function sheetReview() {
     track('memory_saved', { kind: R.mode, n: s.added });
     closeSheet();
     if (s.meetingId) boardFromMemory(s.meetingId, s.added);
+    else if (target && target !== 'none') boardFromMemory(target, s.added);
     else {
       const names = [...accepted].map(id => (sessionPeople.get(id) || {}).name).filter(Boolean).slice(0, 2);
       toast(s.added ? `Saved ${s.added} ${s.added === 1 ? 'thing' : 'things'} to memory${names.length ? `. They’ll be on your next board with ${names.join(' and ')}` : ''}.` : 'Nothing new was saved.');
@@ -2294,7 +2335,8 @@ async function boardFromMemory(meetingId, added, opts) {
     if (!open) return prior.id;
     closeToday();
     if (S.boardId !== prior.id) switchBoard(prior.id);
-    toast((added ? `Saved ${added} things to memory. ` : '') + refreshNote(res));
+    updateGoalBar();
+    toast((added ? `Saved ${added} things to memory. ` : '') + (opts.goal ? refreshNote(res).replace(/^Brought up to date: /, 'Shaped around your goal: ').replace('The board was already up to date.', 'The board already fits that goal.') : refreshNote(res)));
     return prior.id;
   }
   const b = fromEngine(r.board, rid('b-'), { meetingId });
@@ -2314,7 +2356,12 @@ async function boardFromMemory(meetingId, added, opts) {
 }
 function updateNotesBtn() { const b = board(), btn = $('#b-notes'); if (btn) btn.hidden = !(b && b.meetingId); }
 
-const genOf = (b, r, inputs, auto) => ({ inputs: inputs || '', at: Date.now(), mode: r.mode === 'model' ? 'model' : 'rules', title: b.title, auto, els: JSON.parse(JSON.stringify(b.elements)) });
+// Goals offered before the user set theirs stay on offer afterwards, so they can change their mind.
+const genOf = (b, r, inputs, auto, was) => ({
+  inputs: inputs || '', at: Date.now(), mode: r.mode === 'model' ? 'model' : 'rules', title: b.title, auto,
+  goals: r.goals && r.goals.length ? r.goals : (was && was.goals) || [], goalHint: r.goalHint || (was && was.goalHint) || '',
+  els: JSON.parse(JSON.stringify(b.elements)),
+});
 
 // New content for the cards still as drafted; everything the user touched stays theirs.
 function refreshBoard(b, r, inputs, auto) {
@@ -2326,7 +2373,7 @@ function refreshBoard(b, r, inputs, auto) {
   const ids = new Set(b.elements.map(e => e.id));
   b.links = (b.links || []).filter(l => (!l.from.id || ids.has(l.from.id)) && (!l.to.id || ids.has(l.to.id)));
   if (b.title === b.gen.title) b.title = next.title;
-  b.gen = genOf(next, r, inputs, auto || b.gen.auto);
+  b.gen = genOf(next, r, inputs, auto || b.gen.auto, b.gen);
   b.updatedAt = Date.now();
   if (res.updated || res.added) b.reflow = true;
   if (!here && (res.updated || res.added || res.removed)) b.news = `Updated ${hm(new Date())} with what’s new. ` + refreshNote(res).replace(/^Brought up to date: /, '');
@@ -2342,6 +2389,67 @@ function refreshNote(res) {
   const parts = [n(res.updated, 'card updated', 'cards updated'), n(res.added, 'new card', 'new cards'), n(res.removed, 'card no longer relevant', 'cards no longer relevant')].filter(Boolean);
   if (!parts.length) return 'The board was already up to date.';
   return `Brought up to date: ${parts.join(', ')}.${res.kept ? ' Your edits are kept.' : ''}`;
+}
+
+/* ================= the goal ================= */
+// Every meeting is for something different, and one line from the person says it better than
+// any guess. A board drafts itself with the best reading of the goal; this bar asks for theirs
+// (the readings are one tap), and the board is redrawn around it, keeping their edits.
+const meetingById = id => (Mem.data ? Mem.data.meetings.find(m => m.id === id) : null);
+async function setMeetingGoal(meetingId, text, open) {
+  await (Mem.ready || (Mem.ready = loadMemory()));
+  const m = meetingById(meetingId); if (!m || GOAL.busy.has(meetingId)) return;
+  const t = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 280);
+  if ((m.goal || '') === t) { GOAL.edit = null; updateGoalBar(); return; }
+  if (t) m.goal = t; else delete m.goal;
+  GOAL.busy.add(meetingId); AP.hold.add(meetingId); TD.busy.add(meetingId);
+  GOAL.edit = null; GOAL.draft = '';
+  updateGoalBar(); queueToday();
+  try {
+    await saveMemory();
+    track('goal_set', { kind: t ? 'set' : 'cleared' });
+    const bid = await boardFromMemory(meetingId, 0, { open: open !== false, goal: true });
+    if (bid && open === false) toast(t ? 'Board shaped around your goal' : 'Board redrawn', { label: 'Open', fn: () => openFromToday(meetingId) });
+  } finally {
+    GOAL.busy.delete(meetingId); AP.hold.delete(meetingId); TD.busy.delete(meetingId);
+    updateGoalBar(); queueToday();
+  }
+}
+function updateGoalBar() {
+  if (!GOAL.el) { GOAL.el = h('div', { id: 'goalbar', hidden: true }); stage.append(GOAL.el); }
+  const was = GOAL.el.hidden ? 0 : GOAL.el.offsetHeight;
+  drawGoalBar();
+  // A board still fitted to the screen stays clear of the bar as it grows or shrinks.
+  const b = board();
+  if (b && b.autoFit && !S.viewTouched && (GOAL.el.hidden ? 0 : GOAL.el.offsetHeight) !== was && els().length) fitAll(false);
+}
+function drawGoalBar() {
+  const bar = GOAL.el, b = board();
+  const m = b && b.meetingId ? meetingById(b.meetingId) : null;
+  if (!m || b.goalSkip) { bar.hidden = true; bar.textContent = ''; return; }
+  // Typing in it: leave it alone, whatever else just changed.
+  if (!bar.hidden && bar.dataset.for === m.id && bar.contains(document.activeElement) && document.activeElement.tagName === 'INPUT') return;
+  bar.hidden = false; bar.dataset.for = m.id;
+  const busy = GOAL.busy.has(m.id);
+  if (busy) { bar.replaceChildren(h('div', { class: 'gb-row' }, ic('spark'), h('span', { class: 'gb-k', text: 'Shaping the board around your goal…' }))); return; }
+  if (m.goal && GOAL.edit !== m.id) {
+    bar.replaceChildren(h('div', { class: 'gb-row' }, h('span', { class: 'gb-k', text: 'Goal' }), h('span', { class: 'gb-goal', text: m.goal, title: m.goal }),
+      h('button', { class: 'btn', type: 'button', onclick: () => { GOAL.edit = m.id; GOAL.draft = m.goal; updateGoalBar(); const i = $('input', bar); if (i) { i.focus(); i.select(); } } }, 'Change')));
+    return;
+  }
+  const gen = b.gen || {};
+  const input = h('input', { class: 'in', value: GOAL.edit === m.id ? GOAL.draft : '', maxlength: 280, autocomplete: 'off', 'aria-label': 'The goal of this meeting',
+    placeholder: gen.goalHint ? 'In a line: ' + gen.goalHint : 'In a line: what do you want out of it?' });
+  input.addEventListener('input', () => { GOAL.draft = input.value; });
+  const go = () => { if (input.value.trim() || m.goal) { input.blur(); setMeetingGoal(m.id, input.value, true); } else input.focus(); };
+  const form = h('form', { class: 'gb-row', onsubmit: ev => { ev.preventDefault(); go(); } },
+    h('label', { class: 'gb-k', text: 'What’s this meeting for?' }), input,
+    h('button', { class: 'btn primary', type: 'submit' }, ic('spark'), 'Shape the board'),
+    h('button', { class: 'btn icon-only', type: 'button', title: m.goal ? 'Keep the goal as it is' : 'Not now', 'aria-label': 'Close', onclick: () => { if (m.goal) GOAL.edit = null; else b.goalSkip = true; updateGoalBar(); } }, ic('close')));
+  input.addEventListener('keydown', ev => { if (ev.key === 'Escape') { ev.preventDefault(); input.blur(); if (m.goal) { GOAL.edit = null; updateGoalBar(); } } });
+  const picks = (gen.goals || []).filter(t => t !== m.goal);
+  bar.replaceChildren(form, picks.length ? h('div', { class: 'gb-picks' }, h('span', { class: 'gb-k', text: 'Or one of these' }),
+    picks.map(t => h('button', { class: 'gb-pick', type: 'button', title: 'Use this as the goal', onclick: () => setMeetingGoal(m.id, t, true) }, t))) : null);
 }
 
 /* ================= Granola import ================= */
@@ -2410,11 +2518,16 @@ async function granolaPick() {
   notes.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
   const have = new Set(Mem.data.docs.map(d => d.id));
   const recent = Date.now() - 30 * 864e5;
+  // Ticked to start with: recent notes that mention someone or some company memory knows, so an
+  // internal stand-up isn't read by default. With nothing in memory yet, every recent one.
+  const words = new Set([...Mem.data.people.map(p => p.name.split(/\s+/)[0]), ...Mem.data.companies.map(c => c.name.split(/\s+/)[0])]
+    .map(w => w.toLowerCase()).filter(w => w.length >= 3));
+  const mentionsKnown = t => !words.size || (t || '').toLowerCase().split(/[^\p{L}\p{N}]+/u).some(w => words.has(w));
   let picked = 0;
   const count = h('span');
   const rows = notes.map(n => {
     const inMemory = have.has('granola-' + n.id);
-    const on = !inMemory && new Date(n.created_at).getTime() > recent && picked < 8;
+    const on = !inMemory && new Date(n.created_at).getTime() > recent && mentionsKnown(n.title) && picked < 8;
     if (on) picked++;
     const cb = h('input', { type: 'checkbox', checked: on, 'data-note': n.id });
     cb.addEventListener('change', updateCount);
@@ -2425,7 +2538,7 @@ async function granolaPick() {
   const readBtn = h('button', { class: 'btn primary', type: 'button', onclick: () => readGranola([...sheet.querySelectorAll('[data-note]')].filter(c => c.checked).map(c => c.dataset.note)) }, ic('spark'), count);
   function updateCount() { const n = sheet.querySelectorAll('[data-note]:checked').length; count.textContent = n === 1 ? 'Read 1 note' : `Read ${n} notes`; readBtn.disabled = !n; }
   sheetFrame('Bring in your Granola notes',
-    'Pick the meetings worth remembering, usually the ones with people outside your company. Each is read by the model, 10–20 seconds a note, and nothing is saved until you’ve checked it.',
+    'Pick the meetings worth remembering, usually the ones with people outside your company. The ones ticked mention people you already know. Each is read by the model, 10–20 seconds a note, and nothing is saved until you’ve checked it.',
     notes.length ? [error ? h('p', { class: 'sh-err', text: error }) : null, h('div', { class: 'gr-list' }, rows)] : [h('p', { class: 'rv-note', text: 'No Granola notes from the last 60 days.' })],
     [h('button', { class: 'btn', type: 'button', onclick: closeSheet }, 'Cancel'), readBtn]);
   updateCount();
@@ -2542,7 +2655,7 @@ function calendarCard() {
 
 // Drafting without being asked: one board at a time, soonest meeting first. A board that's on
 // screen isn't changed under the person looking at it; it offers the update instead.
-const AP = { running: false, t: 0, skip: new Set(), offered: new Set() };
+const AP = { running: false, t: 0, skip: new Set(), offered: new Set(), hold: new Set() };
 function queuePrep() { clearTimeout(AP.t); AP.t = setTimeout(autoPrep, 1200); }
 async function autoPrep() {
   if (AP.running || !Engine || !Engine.prepPlan || !Mem.data) return;
@@ -2552,8 +2665,10 @@ async function autoPrep() {
       const states = Object.values(S.boards).filter(b => b.meetingId).map(b => ({ meetingId: b.meetingId, inputs: b.gen ? b.gen.inputs : undefined, refreshable: !!b.gen }));
       const plan = Engine.prepPlan(Mem.data, states, new Date().toISOString());
       const here = !TD.open && !sheetOpen() && board() && board().meetingId;
-      const id = plan.make.find(x => !AP.skip.has(x)) || plan.refresh.find(x => !AP.skip.has(x) && x !== here);
-      if (here && plan.refresh.includes(here)) {
+      // A meeting whose goal was just set is already being redrawn around it.
+      const free = x => !AP.skip.has(x) && !AP.hold.has(x);
+      const id = plan.make.find(free) || plan.refresh.find(x => free(x) && x !== here);
+      if (here && plan.refresh.includes(here) && !AP.hold.has(here)) {
         const key = here + ':' + (board().gen ? board().gen.inputs : '');
         if (!AP.offered.has(key)) { AP.offered.add(key); toast('There’s new information for this board.', { label: 'Update it', fn: () => boardFromMemory(here, 0, { open: true }) }); }
       }
@@ -2566,12 +2681,86 @@ async function autoPrep() {
   } finally { AP.running = false; queueToday(); }
 }
 
+/* ================= demo ================= */
+// With the server started with --demo, a whole founder's week to explore: memory to start from,
+// a calendar, Granola notes, and documents to paste at the right moments, with a guide on Today.
+const DEMO = { on: false, samples: [], calendar: {} };
+async function demoStatus() {
+  try {
+    const r = await fetch('/api/demo', grHeaders);
+    if (!r.ok) return;
+    const b = await r.json();
+    Object.assign(DEMO, { on: true, samples: b.samples || [], calendar: b.calendar || {} });
+    queueToday();
+  } catch (_) { }
+}
+const demoLoaded = () => DEMO.on && Mem.data && Mem.data.user && Mem.data.user.email === 'alex@cueboard.example';
+function openDemo() {
+  closeMenu(); blurField(); exitPen();
+  R = { mode: 'demo' };
+  sheet.hidden = false;
+  sheetFrame('Load the demo week', 'Alex Rivera is a founder raising a seed round and selling at the same time. This week:',
+    [h('ul', { class: 'demo-list' },
+      h('li', {}, h('b', { text: 'Brightline Health' }), ' · a customer renewal at risk, check-in in about 90 minutes'),
+      h('li', {}, h('b', { text: 'Loomwise' }), ' · coffee with Lena that just ended, waiting for your notes'),
+      h('li', {}, h('b', { text: 'Larkspur Ventures' }), ' · the partner meeting tomorrow; the first call’s notes are in Granola'),
+      h('li', {}, h('b', { text: 'Northwind Logistics' }), ' · a first sales call tomorrow, from an intro email'),
+      h('li', {}, h('b', { text: 'Fieldstone CRM' }), ' · a partnership, technical follow-up in three days')),
+      h('p', { class: 'rv-note', text: 'It replaces the memory and boards in this browser, then connects the sample calendar so the boards draft themselves.' })],
+    [h('button', { class: 'btn', type: 'button', onclick: closeSheet }, 'Cancel'), h('button', { class: 'btn primary', type: 'button', onclick: loadDemo }, ic('spark'), 'Load it')]);
+}
+async function loadDemo() {
+  let b = null;
+  try { const r = await fetch('/api/demo', grHeaders); b = r.ok ? await r.json() : null; } catch (_) { }
+  if (!b || !b.memory) { toast('Couldn’t load the demo week'); return; }
+  await (Mem.ready || (Mem.ready = loadMemory()));
+  Mem.data = Engine.reviveMemory(b.memory, 'me');
+  await saveMemory();
+  for (const x of Object.values(S.boards)) if (!x.example) { delete S.boards[x.id]; dirty.delete(x.id); await Store.remove(x.id); }
+  try { localStorage.removeItem('cueboard.demo.done'); } catch (_) { }
+  // The sample calendar connects without Google and comes back to Today, where boards draft.
+  location.assign('/oauth/google/start');
+}
+const meetingOf = calId => Mem.data && Mem.data.meetings.find(m => m.calendar && m.calendar.id === calId);
+const sampleText = id => (DEMO.samples.find(x => x.id === id) || {}).text || '';
+function pasteSample(id) {
+  const t = sampleText(id); if (!t) return;
+  TD.draft = (TD.draft.trim() ? TD.draft.replace(/\s+$/, '') + Engine.PASTE_BREAK : '') + t;
+  renderToday();
+  const ta = $('#td-paste', todayEl); if (ta) { ta.focus(); ta.scrollTop = ta.scrollHeight; }
+}
+function openMeeting(calId, float) {
+  const m = meetingOf(calId); if (!m) { toast('Connect the calendar first'); return; }
+  if (boardFor(m.id)) openFromToday(m.id, float);
+  else boardFromMemory(m.id).then(id => { if (id && float) toggleFloat(); });
+}
+// Things to try, in an order that shows each part working. Ticks are this browser's convenience.
+function demoDone() { try { return JSON.parse(localStorage.getItem('cueboard.demo.done') || '[]'); } catch (_) { return []; } }
+function markDemo(k) { try { const d = new Set(demoDone()); d.add(k); localStorage.setItem('cueboard.demo.done', JSON.stringify([...d])); } catch (_) { } }
+function demoGuide() {
+  if (!demoLoaded()) return null;
+  const done = new Set(demoDone());
+  const step = (k, title, hint, label, fn) => h('li', { class: done.has(k) ? 'done' : '' },
+    h('div', { class: 'demo-t', text: title }), h('div', { class: 'td-muted', text: hint }),
+    label ? h('button', { class: 'btn', type: 'button', onclick: () => { markDemo(k); fn(); } }, label) : null);
+  const lena = meetingOf('demo_loomwise_coffee');
+  return h('div', { class: 'td-owed demo-guide' }, h('h2', { text: 'Things to try' }),
+    h('ol', {},
+      step('brightline', 'Open the Brightline board', 'A renewal at risk: the promise you’re late on, seats falling, their price objection and your answer. Hover any line to see where it came from.', 'Open it', () => openMeeting('demo_brightline_renewal')),
+      step('sofia', 'New terms arrive before the call', 'Paste Sofia’s email and read it. The Brightline board updates itself and keeps anything you changed.', 'Paste Sofia’s email', () => pasteSample('sofia')),
+      step('lena', 'Coffee with Lena just ended', 'Add what happened. What Lena says about Maya ends up on tomorrow’s Larkspur board too.', 'Add the notes', () => { if (lena) openSheet('notes', { meetingId: lena.id, text: sampleText('lena') }); }),
+      step('granola', 'Bring in the call with Maya from Granola', 'The partner meeting board learns where you left off: the cohort table, churn, the Zoom question.', granolaOffered() ? 'Import from Granola' : null, () => openGranolaImport()),
+      step('cohort', 'Keep a promise', 'Paste the email where you sent Maya the cohort table. The promise drops off what you owe.', 'Paste the email', () => pasteSample('cohort')),
+      step('float', 'Float a board beside the call', 'A small window over Zoom or Meet in Chrome. H hides it, S shows sources, F finds anything.', 'Float the Larkspur board', () => openMeeting('demo_larkspur_partner', true)),
+      step('edit', 'Make a board yours', 'Fill in a Goal or add a note, then paste something new about that meeting. Your changes stay; the rest updates.', null)));
+}
+
 /* ================= today ================= */
 // The front page when meetings are coming up: each one with whether its board is ready, what
 // changed since you last spoke and what's owed, and one box to paste a new meeting into.
 const todayEl = h('section', { id: 'today', hidden: true, 'aria-label': 'Today' });
 app.append(todayEl);
-const TD = { open: false, busy: new Set(), draft: '', t: 0, iv: 0 };
+const TD = { open: false, busy: new Set(), draft: '', t: 0, iv: 0, goals: {}, goalEdit: null };
 const NUMBERS = ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine'];
 const STATUS_CHIP = {
   ready: ['Board ready', 'ok'], not_prepped: ['Not prepped yet', 'plain'], needs_notes: ['Needs your notes', 'warn'],
@@ -2612,6 +2801,10 @@ function openFromToday(id, float) {
 
 function renderToday() {
   if (!TD.open) return;
+  // A goal being typed keeps its place through a redraw.
+  const typing = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.goal : null;
+  const caret = typing ? document.activeElement.selectionStart : 0;
+  if (typing) setTimeout(() => { const i = todayEl.querySelector(`[data-goal="${typing}"]`); if (i && document.activeElement !== i) { i.focus(); try { i.setSelectionRange(caret, caret); } catch (_) { } } }, 0);
   const now = new Date();
   const model = Mem.data ? Engine.todayModel(Mem.data, now.toISOString(), madeFor()) : { sections: [], owed: [], upcoming: 0 };
   const todays = (model.sections.find(x => x.key === 'today') || { meetings: [] }).meetings.length;
@@ -2652,10 +2845,12 @@ function renderToday() {
     const text = TD.draft; TD.draft = '';
     openSheet('prep', { text, go: true });
   } }, ic('spark'), 'Read them');
+  const samples = DEMO.on && DEMO.samples.length ? h('div', { class: 'demo-samples' }, h('span', { class: 'td-muted', text: 'Demo documents:' }),
+    DEMO.samples.map(x => h('button', { class: 'btn', type: 'button', title: x.hint, onclick: () => pasteSample(x.id) }, x.label))) : null;
   const paste = h('div', { class: 'td-paste' },
     h('h2', { text: 'Paste for a meeting' }),
     h('label', { for: 'td-paste', text: 'The invite, the email thread, your notes: paste them one after another. Cueboard sorts out which is which.' }),
-    ta, chips, readBtn);
+    ta, chips, samples, readBtn);
 
   const owed = h('div', { class: 'td-owed' }, h('h2', { text: 'Owed this week' }),
     model.owed.length ? h('ul', {}, model.owed.map(o => h('li', {},
@@ -2666,7 +2861,7 @@ function renderToday() {
   const gr = granolaOffered() ? h('div', { class: 'td-owed' }, h('h2', { text: 'Notes you already have' }),
     h('p', { class: 'td-muted', text: 'Bring in past meetings from Granola, so follow-ups know where you left off.' }),
     h('button', { class: 'btn td-gr', type: 'button', onclick: openGranolaImport }, ic('note'), 'Import from Granola')) : null;
-  todayEl.replaceChildren(top, h('div', { class: 'td-main' }, list, h('aside', { class: 'td-side' }, calendarCard(), paste, gr, owed)));
+  todayEl.replaceChildren(top, h('div', { class: 'td-main' }, list, h('aside', { class: 'td-side' }, demoGuide(), calendarCard(), paste, gr, owed)));
 }
 
 function meetingCard(m, key, now) {
@@ -2676,7 +2871,6 @@ function meetingCard(m, key, now) {
   const [chip, tone] = STATUS_CHIP[status];
   const info = [
     m.people.length ? h('div', {}, h('span', { class: 'td-k', text: 'With ' }), m.people.join(', ')) : null,
-    m.goal ? h('div', {}, h('span', { class: 'td-k', text: 'Goal ' }), m.goal) : null,
     m.since ? h('div', {}, h('span', { class: 'td-k', text: 'Since last time ' }), m.since) : null,
     ...m.owed.map(o => h('div', { class: o.overdue ? 'td-bad' : '' }, o.text)),
   ].filter(Boolean);
@@ -2694,12 +2888,31 @@ function meetingCard(m, key, now) {
   if (m.joinUrl && key === 'today' && status !== 'add_notes') act.push(h('a', { class: 'btn', href: m.joinUrl, target: '_blank', rel: 'noopener noreferrer' }, 'Join the call'));
   const note = m.notesFor && status !== 'add_notes' ? h('p', { class: 'td-muted', text: 'Notes from your last call with them aren’t in yet, so the board won’t know where you left off.' }) : null;
   const made = has && status === 'ready' ? boardFor(m.id).gen : null;
+  // One line on what it's for shapes the board. Asked for until it's given; changeable after.
+  let goal = null;
+  if (status !== 'add_notes' && status !== 'reading') {
+    if (m.goal && TD.goalEdit !== m.id) {
+      goal = h('div', { class: 'td-goal' }, h('span', { class: 'td-k', text: 'Goal ' }), h('span', { text: m.goal }),
+        h('button', { class: 'td-link', type: 'button', onclick: () => { TD.goalEdit = m.id; TD.goals[m.id] = m.goal; renderToday(); const i = todayEl.querySelector(`[data-goal="${m.id}"]`); if (i) { i.focus(); i.select(); } } }, 'Change'));
+    } else {
+      const input = h('input', { class: 'in', 'data-goal': m.id, value: TD.goals[m.id] || '', maxlength: 280, autocomplete: 'off', 'aria-label': `Goal for ${m.title}`,
+        placeholder: 'What’s it for? One line shapes the board' });
+      input.addEventListener('input', () => { TD.goals[m.id] = input.value; });
+      goal = h('form', { class: 'td-goal', onsubmit: ev => {
+        ev.preventDefault();
+        const v = input.value.trim(); if (!v && !m.goal) { input.focus(); return; }
+        delete TD.goals[m.id]; TD.goalEdit = null; input.blur();
+        setMeetingGoal(m.id, v, false);
+      } }, input, h('button', { class: 'btn', type: 'submit' }, m.goal ? 'Save' : 'Set goal'));
+    }
+  }
   return h('article', { class: 'td-card' },
     h('div', { class: 'td-meta' }, h('span', { class: 'td-time', text: when }), h('span', { class: 'td-tag ' + tone, text: chip }),
       h('span', { class: 'td-muted', text: m.stage === 'followup' ? `Follow-up · meeting ${m.meetingNo}` : 'First meeting' }),
       made && made.auto ? h('span', { class: 'td-muted', text: `Drafted for you · ${hm(new Date(made.at))}` }) : null),
     h('h3', { class: 'td-title', text: m.title }),
     info.length ? h('div', { class: 'td-info' }, info) : null,
+    goal,
     note,
     h('div', { class: 'td-actions' }, act));
 }
@@ -2718,7 +2931,20 @@ const floatOpen = () => !!(FL.win && !FL.win.closed && FL.ui);
 // Mid-meeting the board's tab sits behind the call, where the browser slows its timers, so the
 // window does its own timing: its timer ticks and updates run on the window that's on screen.
 const flLater = (fn, ms) => (FL.win ? FL.win.setTimeout(fn, ms) : setTimeout(fn, ms));
-const isKeyCard = e => e.type === 'card' && e.lines.some(l => /^(goal|ask)$/i.test(l.label || '') && l.text.trim());
+const isKeyCard = e => e.type === 'card' && e.lines.some(l => /^goal$/i.test(l.label || '') && l.text.trim());
+// The board as the meeting runs: each part, then what sits under it; whatever belongs to no
+// part (wide charts, things added off to the side) after.
+function planOrder(all) {
+  const parts = phaseCards(all); if (parts.length < 2) return null;
+  const mid = e => e.x + sizeOf(e).w / 2;
+  const taken = new Set(parts.map(x => x.e)), out = [];
+  for (const x of parts) {
+    const top = x.e.y, l = x.e.x - 12, r = x.e.x + sizeOf(x.e).w + 12;
+    const under = all.filter(e => !taken.has(e) && !e.live && e.y > top && mid(e) >= l && mid(e) <= r && sizeOf(e).w <= sizeOf(x.e).w * 1.6).sort((a, b) => a.y - b.y);
+    out.push(x.e, ...under); under.forEach(e => taken.add(e));
+  }
+  return out.concat(all.filter(e => !taken.has(e) && !e.live));
+}
 
 async function toggleFloat() {
   if (floatOpen()) { closeFloat(); return; }
@@ -2841,9 +3067,10 @@ function renderFloat() {
   // The run of show first, then the board in its reading order, with notes jotted in the call last.
   const all = readingOrder(els()).filter(e => !FLOAT_SKIP.has(e.type) && textOf(e).trim());
   const key = all.find(isKeyCard);
-  const items = (key ? [key] : []).concat(all.filter(e => e !== key && !e.live), all.filter(e => e !== key && e.live));
+  const body = all.filter(e => e !== key);
+  const items = (key ? [key] : []).concat(planOrder(body) || body.filter(e => !e.live), body.filter(e => e.live));
   const qs = all.find(e => e.type === 'list' && /question/i.test(e.title || '')) || all.find(e => e.type === 'list');
-  renderCompact(key, qs);
+  renderCompact(key, qs, all);
   if (!FL.strip && !FL.hidden) {
     FL.w = FL.win.innerWidth;
     const open = new Set([...U.stack.querySelectorAll('.fl-open')].map(n => n.dataset.id));
@@ -2852,6 +3079,7 @@ function renderFloat() {
     U.stack.replaceChildren(...(items.length ? items.map(e => floatNode(e, W, open.has(e.id))) : [h('div', { class: 'fl-empty', text: 'Nothing on this board yet.' })]));
     U.scroll.scrollTop = top;
     applyFloatFind();
+    FL.part = null; floatTimer();
   }
   if (FL.strip) fitStrip();
 }
@@ -2887,9 +3115,10 @@ function floatCite(cite, always, l) {
 }
 
 // Compact: one card with the goal, and the next question large enough to read mid-sentence.
-function renderCompact(key, qs) {
+function renderCompact(key, qs, all) {
   const U = FL.ui;
-  const pick = re => key && key.lines.find(l => re.test(l.label || '') && l.text.trim());
+  // The goal is on the key card; the ask may sit there or at the end of the plan.
+  const pick = re => [key].concat(all || []).filter(e => e && e.type === 'card').map(e => e.lines.find(l => re.test(l.label || '') && l.text.trim())).find(Boolean);
   const goal = pick(/^goal$/i), ask = pick(/^ask$/i);
   const live = qs ? qs.items.map((it, i) => ({ it, i })).filter(x => x.it.text.trim()) : [];
   const left = live.filter(x => !x.it.done), next = left[0];
@@ -2965,7 +3194,19 @@ function floatTimer() {
   if (!floatOpen()) return;
   const U = FL.ui, s = Math.floor(tElapsed() / 1000), over = s > T.len * 60;
   const mm = String(Math.floor(s / 60)).padStart(2, '0'), ss = String(s % 60).padStart(2, '0');
-  U.time.textContent = (T.running || s) ? `${mm}:${ss} of ${T.len} min` : `Start timer · ${T.len} min`;
+  // With the timer running, the part of the plan the clock is in is named and marked, and the
+  // window moves to it once as it begins.
+  const parts = phaseCards(), min = s / 60;
+  const cur = (T.running || s) ? (parts.find(x => min >= x.from && min < x.to) || (parts.length && min >= parts.at(-1).to ? parts.at(-1) : null)) : null;
+  const name = cur ? (cur.e.title || '').trim() : '';
+  U.time.textContent = (T.running || s) ? `${mm}:${ss} of ${T.len} min${name ? ' · ' + name : ''}` : `Start timer · ${T.len} min`;
+  const curId = cur ? cur.e.id : null;
+  if (curId !== FL.part) {
+    const moved = FL.part !== null && FL.part !== undefined;
+    FL.part = curId;
+    U.stack.querySelectorAll(':scope > .el').forEach(n => n.classList.toggle('fl-now', n.dataset.id === curId));
+    if (curId && moved && T.running && !FL.strip && !FL.hidden && !FL.finding) { const c = U.stack.querySelector(`:scope > .el[data-id="${curId}"]`); if (c) c.scrollIntoView({ block: 'start', behavior: 'smooth' }); }
+  }
   U.time.classList.toggle('run', T.running); U.time.classList.toggle('over', over);
   U.prog.firstChild.style.width = Math.min(100, s / (T.len * 60) * 100) + '%';
   U.prog.classList.toggle('over', over);
@@ -3913,6 +4154,7 @@ async function boot() {
   Mem.ready = Mem.ready || loadMemory();
   granolaStatus().then(() => track('app_opened'));
   calendarBoot();
+  demoStatus();
   Mem.ready.then(m => {
     if (!m || S.touched || !Engine || !Engine.todayModel) return;
     const t = Engine.todayModel(m, new Date().toISOString(), madeFor());

@@ -1,5 +1,6 @@
 // What the canvas app gets from the engine, bundled into the page as `CueEngine`.
 import { buildBoard } from '../src/engine.ts';
+import { playbookFor } from '../src/playbooks.ts';
 import { toCanvas } from '../src/export.ts';
 import type { CanvasBoard } from '../src/export.ts';
 import type { MeetingType, Packet, Stage } from '../src/types.ts';
@@ -130,7 +131,14 @@ export async function boardForMemory(memory: Memory, meetingId: string, now: str
   const p = packetFor(memory, meetingId, now);
   if (!p) return null;
   const r = await buildBoardSmart(p, llm);
-  return { board: toCanvas(r.board, p), mode: r.mode, brief: r.brief ?? null, failed: r.steps.filter(x => !x.ok).map(x => x.step), stage: r.board.stage };
+  // Goals to offer in one tap when the user hasn't said theirs: the model's reading and its
+  // runners-up. Without a model there's only the kind of thing to write, as a placeholder.
+  const g = r.brief?.goal;
+  const goals = g && g.basis !== 'stated' ? [...new Set([g.text, ...g.alternatives].map(t => t.trim()).filter(Boolean))].slice(0, 3) : [];
+  return {
+    board: toCanvas(r.board, p), mode: r.mode, brief: r.brief ?? null, failed: r.steps.filter(x => !x.ok).map(x => x.step), stage: r.board.stage,
+    goals, goalHint: playbookFor(r.board.type, r.board.stage).goalHint,
+  };
 }
 
 export { buildBoard, toCanvas, emptyMemory };

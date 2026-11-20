@@ -71,3 +71,18 @@ test('lines you add to a card stay; ticked questions stay ticked', () => {
     [list([{ text: 'Who else decides?', done: false }, { text: 'What’s the timeline?', done: false }, { text: 'Is the cohort table enough?', done: false }])]);
   assert.deepEqual((q.elements[0].items as { text: string; done: boolean }[]).map(i => `${i.done ? '✓' : '·'} ${i.text}`), ['✓ Who else decides?', '· What’s the timeline?', '· Is the cohort table enough?']);
 });
+
+test('when a new goal reorders the plan, untouched cards follow their part; a card you moved stays put', () => {
+  const part = (id: string, tag: string, x: number): El => ({ id, type: 'card', x, y: 200, w: 280, h: 80, color: 'lilac', tag, title: id, lines: [] });
+  const drafted = [part('phase-show', '5–20 min', 304), part('phase-learn', '20–35 min', 608), stat('number-mrr', '$33k'), card('questions', ['a'], { x: 608, y: 300 })];
+  drafted[2].x = 304; drafted[2].y = 300;
+  const current = structuredClone(drafted);
+  current[1].y = 214; current[3].y = 330;      // settled to real heights: not a move
+  current[2].x = 900;                           // you dragged the number off to the side
+  const next = [part('phase-learn', '5–20 min', 304), part('phase-show', '20–35 min', 608), { ...stat('number-mrr', '$33k'), x: 608, y: 300 }, card('questions', ['a'], { x: 304, y: 300 })];
+  const by = new Map(mergeRefresh(current, drafted, next).elements.map(e => [e.id, e]));
+  assert.deepEqual([by.get('phase-learn')!.x, by.get('phase-learn')!.tag], [304, '5–20 min']);
+  assert.deepEqual([by.get('phase-show')!.x, by.get('phase-show')!.tag], [608, '20–35 min']);
+  assert.equal(by.get('questions')!.x, 304, 'the questions follow the part they belong to');
+  assert.equal(by.get('number-mrr')!.x, 900, 'where you put it');
+});

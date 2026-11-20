@@ -21,7 +21,7 @@ test('a Granola note becomes one document with its parts labelled, and you as �
   assert.equal(doc.url, call.web_url);
   const lines = doc.text.split('\n');
   assert.equal(lines[1], 'Meeting: 2026-10-08 10:00–10:30');
-  assert.equal(lines[2], 'With: Maya Chen <maya@larkspur.vc>', 'you are not one of the people you met');
+  assert.equal(lines[2], 'With: Maya Chen <maya@larkspur.example>', 'you are not one of the people you met');
   for (const heading of ['MY NOTES', 'GRANOLA’S SUMMARY (written by Granola’s AI)', 'TRANSCRIPT']) assert.ok(lines.includes(heading), heading);
   assert.match(doc.text, /^Them \(Maya Chen\): Thanks for making time\. How does churn look for the small teams\?$/m, 'one voice, one paragraph');
   assert.match(doc.text, /^Me: We’re at 3\.1% a month/m);

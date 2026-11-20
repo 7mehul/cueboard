@@ -1,5 +1,56 @@
 # Cueboard
 
+**Visual prep for your next meeting.** Say in a line what a meeting is for, and Cueboard draws
+how it should run: the goal across the top, the meeting's parts in order with their minutes,
+and under each part what you need in it, from the people and their history to the numbers, the
+questions to ask, the objections they raised and the promises still open. Every line says where
+it came from. During the call, a small window floats over Zoom, Meet or Teams and follows along.
+
+It works from what you already have: your calendar, your notes from past calls (pasted, or
+imported from Granola), emails and invites. It remembers people, not transcripts, so the second
+meeting with someone knows where the first one left off.
+
+## Try it in two minutes, no key needed
+
+```bash
+git clone https://github.com/7mehul/cueboard.git && cd cueboard
+npm install
+node scripts/serve.ts 5190 --demo --fake-model
+```
+
+Open http://localhost:5190, choose **Load the demo week** in the boards menu, and open a board.
+A founder's week is loaded: a renewal at risk, an investor partner meeting, a first sales call.
+Type a goal in the bar at the top ("find out why seats are falling") and the board redraws
+around it. `--fake-model` is a stand-in that only knows the demo's documents.
+
+Needs Node 26 or later.
+
+## Use it with Claude
+
+Sign in once with the [ant CLI](https://platform.claude.com/docs/en/cli-sdks-libraries/cli/quickstart),
+or set `ANTHROPIC_API_KEY`, then start the server without `--fake-model`:
+
+```bash
+ant auth login
+node scripts/serve.ts            # http://localhost:5180
+```
+
+The key or sign-in stays in the server; the page never sees it. Every setting is listed in
+[`.env.example`](.env.example).
+
+## Where the context comes from
+
+| Source | Status | What you need |
+| --- | --- | --- |
+| Paste: invites, email threads, notes, transcripts | Works | Nothing. Paste several at once; each piece is sorted and dated |
+| Google Calendar | Works, read-only | Your own Google Cloud OAuth client ([setup](#calendar-boards-without-asking)) |
+| Granola notes | Works | A Granola Business plan API key |
+| Your profile and goals | Works | Fill in "About you" once |
+| Web research on people and companies | Planned | |
+| Other notetakers (Fireflies, Fathom), Gmail, CRMs | Planned | |
+
+## How it's built
+
 Three parts:
 
 - **The canvas** (`app/`): a freeform board, like Apple Freeform. Everything on it can be moved,
@@ -48,6 +99,37 @@ Lines the engine drafted keep a green bar if they came from a past meeting, a da
 they're unknown, and the source they came from (hover a line, or click a card in Float). Rewriting a line makes it yours and removes the marker. New boards can start from
 the sample meetings (boards menu → New board from a meeting) until real meeting data is connected.
 
+## The goal and the plan
+
+Every meeting is for something different, so the board is built around its goal and laid out in
+the order the meeting should run:
+
+```
+goal ─▶ plan ─▶ board
+one line from    3 or 4 parts, each with its     the goal across the top, one column per part,
+the user, or     minutes: open, the parts where  and under each part what's needed in it: people
+the best         you listen and where you        under the opening, questions where you listen,
+reading of it    present, close on the ask       numbers and proof where you present
+```
+
+- **Asking for it.** A board drafts itself with the best reading of the goal, marked *suggested*.
+  A bar on the board asks "What’s this meeting for?", with that reading and its runners-up one
+  tap away; each meeting on Today has the same one-line field. Setting a goal redraws the board
+  around it and keeps everything the user changed. A goal said in a couple of sentences is kept
+  whole in memory; the board shows a line of it.
+- **The plan.** With a model, the plan comes from the goal: the parts, their names, their minutes
+  and what to get done in each ("Hear why seats fell before defending the price"). Code checks it
+  (opens first, closes last, minutes add up to the meeting) and falls back to the usual plan for
+  that kind of meeting (`src/playbooks.ts`) if it doesn't hold together. What to open with sits in
+  the first part and the ask in the last.
+- **On the canvas** each part is an ordinary card labelled with its minutes ("5–20 min"); retime
+  or rename it like anything else. If a new goal reorders the plan, cards nobody moved follow
+  their part to its new column.
+- **In the call.** Float lists the board in the plan's order and, with the timer running, names
+  and marks the part the clock is in.
+- **Without a key**, `--demo --fake-model` reads the demo week's meetings with a goal, two or
+  three other goals to pick from and a plan for each, so the whole loop can be tried.
+
 ## The board engine
 
 Turns a **meeting packet** (everything known about one meeting) into a **board**: which blocks
@@ -57,10 +139,10 @@ judgment layer it's the part that guarantees the rules.
 
 ```
 packet ─▶ frame ─▶ playbook ─▶ filter facts ─▶ compose blocks ─▶ budget ─▶ layout ─▶ board
-          type,     slots for      drop unsourced,   person, key notes,   drop least     3 columns,
-          first or  type × stage   private, stale,   numbers, notes,      important      notes fill gaps,
-          follow-up                unconfirmed,      questions, trend,    blocks         visuals below,
-                                   conflicting       bars, timeline                      rail for Glance
+          type,     slots and      drop unsourced,   key notes, the plan, drop least     a column per part
+          first or  the plan for   private, stale,   people, numbers,     important      of the plan, charts
+          follow-up type × stage   unconfirmed,      notes, questions,    blocks         tucked under, timeline
+                                   conflicting       trend, bars, timeline               below, rail for Glance
 ```
 
 ## The judgment layer
@@ -82,6 +164,7 @@ packet ─▶ understand ─▶ rank ─▶ engine (compose, budget, layout) ─
 | --- | --- |
 | Meeting type, process and step ("Fundraise · intro call") | First meeting vs. follow-up (from history) |
 | The goal, what decides it, an opener and the ask, marked *suggested* | The user's own goal, opener and ask win; line lengths are enforced |
+| The plan: the meeting's parts, their minutes, what to get done in each | It opens first and closes on the ask; minutes add up; a broken plan is replaced |
 | What decides the meeting, what they want, risks | Every claim needs a source; nothing private or unconfirmed reaches the model or the board |
 | Which facts, people, numbers and questions matter, and why | Bad news, overdue promises and objections they raised always show |
 | Whose numbers matter (ours, theirs, both) | Their numbers only for companies actually in the meeting |
@@ -166,13 +249,39 @@ node scripts/eval-extract.ts --verbose     # a real model reads the six sample d
 ## Run it
 
 ```bash
-npm test                                   # 111 tests: behaviour, the checker catching each broken rule, the judgment layer, memory, Today, Granola, calendar, refresh, the hosted gate
+npm test                                   # 122 tests: behaviour, the plan, the checker catching each broken rule, the judgment layer, memory, Today, Granola, calendar, refresh, the demo week, the hosted gate
 node scripts/show.ts followup              # print a board as text (first | followup | seed:<n>)
 node scripts/scale.ts --n 1000000          # generate, build and check a million boards
 node scripts/scale.ts --n 200000 --edge 0.5   # same, with planted problems in half the packets
 node scripts/gallery.ts                    # render sample boards to reports/gallery.html
 npm run typecheck
 ```
+
+## The demo week
+
+A founder's week to explore everything with, dated from today so it's always this week:
+
+```bash
+node scripts/serve.ts 5190 --demo --fake-model     # no key: the stand-in model plays every document
+node scripts/serve.ts 5191 --demo                  # with ANTHROPIC_API_KEY set: Claude reads it all
+```
+
+Open it, choose **Load the demo week** in the boards menu, and the sample calendar connects and
+the boards draft themselves. Alex Rivera is raising a seed round and selling at the same time:
+
+| Relationship | Where it stands |
+| --- | --- |
+| Brightline Health | A renewal at risk, check-in in about 90 minutes: a late promise, seats falling, a price objection |
+| Loomwise | Coffee with Lena just ended, waiting for notes |
+| Larkspur Ventures | Partner meeting tomorrow; the first call's notes are in (sample) Granola, not memory |
+| Northwind Logistics | A first sales call tomorrow, from an intro email |
+| Fieldstone CRM | A partnership, technical follow-up in three days |
+
+Today shows a **Things to try** guide: Sofia's email updating the Brightline board, Lena's notes
+landing on Maya's card for tomorrow, importing the Maya call from Granola, keeping the cohort
+promise, Floating a board. The demo documents to paste are under the paste box. It all lives in
+`scenarios/demo.ts`, with the reading a good model would give for each document;
+`test/demo.test.ts` checks that every one reads cleanly and every board passes the checker.
 
 ## Calendar: boards without asking
 
@@ -264,7 +373,7 @@ and Render restarts with it.
 | `src/playbooks.ts` | What a good board holds per meeting type and stage, and the block budget per meeting length |
 | `src/facts.ts` | Which facts may appear at all, conflict handling, scoring |
 | `src/compose.ts` | Builds each block: person, key notes, numbers, trend, bars, timeline, quick notes, questions |
-| `src/layout.ts` | Places blocks on the canvas and orders the single-column rail |
+| `src/layout.ts` | Lays the board out as the plan (a column per part, cards under the part they're needed in) and orders the single-column rail |
 | `src/check.ts` | Every rule a board must keep, checked from the packet independently of the engine |
 | `src/models.ts` | Model-agnostic interfaces for classify, extract and rewrite |
 | `src/intel/llm.ts` | The provider interface and schema validation |
@@ -272,7 +381,7 @@ and Render restarts with it.
 | `src/intel/context.ts` | What the model sees: the meeting, the user, context docs, candidate ids (private data filtered out) |
 | `src/intel/steps.ts`, `smart.ts` | Understand and rank prompts; the pipeline with its fallbacks |
 | `src/intel/knowledge.ts` | Personas, processes, situations, wants and needs |
-| `scenarios/` | Six persona situations with what a right board shows, hides and asks; `docs.ts` is a founder–investor story as pasted documents |
+| `scenarios/` | Six persona situations with what a right board shows, hides and asks; `docs.ts` is a founder–investor story as pasted documents; `demo.ts` is the demo week |
 | `src/memory/extract.ts` | Reading a document into memory: the model's step, the checks, and saving what the user kept |
 | `src/memory/packet.ts` | A meeting's packet, as memory seen from that meeting |
 | `src/memory/split.ts` | One paste into several documents: where each starts, what it is, when it's from |
@@ -292,6 +401,7 @@ and Render restarts with it.
 | `Dockerfile`, `render.yaml`, `deploy/local.env` | Running the hosted version on Render, and trying it locally |
 | `synth/` | Seeded synthetic packet generator that plants realistic problems |
 | `test/fixtures.ts` | The Dana Ruiz first meeting and follow-up |
+| `.env.example` | Every setting the server reads, with no values |
 
 ## Rules the checker enforces
 
@@ -300,6 +410,7 @@ and Render restarts with it.
 - No conflicting facts shown together; no fact or line shown twice
 - Every line and title within its length limit; gaps in brackets
 - Memory flags match their sources; follow-ups say where you left off
+- The plan opens first and closes on the ask, 3 or 4 parts, minutes adding up to the meeting
 - Numbers match the latest data; "was X" matches what you actually shared; bad news is marked and prepared for
 - "Up" and "down" match what the numbers did
 - Line charts need 3–12 points, bars 2–6, timelines 2–6 past events and follow-ups only
@@ -313,3 +424,9 @@ and Render restarts with it.
   the type comes from the brief.
 - Six scenarios are a smoke test, not an eval set. Real design-partner meetings should replace them.
 - Synthetic text comes from templates, so it tests the logic, not the writing quality.
+
+## License
+
+[GNU AGPL-3.0](LICENSE). You can use, change and share it; if you run a changed version for other
+people over a network, offer them its source too (the boards menu links to it; point
+`SOURCE_URL` in `app/board.js` at your fork).

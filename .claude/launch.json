@@ -33,6 +33,17 @@
         "--fake-model"
       ],
       "port": 5183
+    },
+    {
+      "name": "cueboard-demo",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "scripts/serve.ts",
+        "5190",
+        "--demo",
+        "--fake-model"
+      ],
+      "port": 5190
     }
   ]
 }
