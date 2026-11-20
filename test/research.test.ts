@@ -92,3 +92,16 @@ test('a search that fails is logged and tried again tomorrow, not on every refre
   assert.equal(researchPlan(r.memory, id, now), null, 'not again today');
   assert.ok(researchPlan(r.memory, id, new Date(NOW.getTime() + 25 * 3600e3).toISOString()), 'again tomorrow');
 });
+
+test('a page matches however the model copied it, but a path is case-sensitive; the source keeps the search’s address', () => {
+  const m = synced();
+  const plan = researchPlan(m, meeting(m, /Northwind/).id, now)!;
+  const f = (url: string, text: string) => ({ about: 'c1', topic: 'company' as const, text, url, published: '' });
+  const r = applyResearch(m, plan, { findings: [
+    f('http://www.Northwind.example/about?utm_source=x#team', 'Midwest freight carrier with 14 depots'),
+    f('https://bit.ly/3xyzab', 'A claim from a different short link'),
+  ] }, [{ url: 'https://northwind.example/about' }, { url: 'https://bit.ly/3XyZaB' }], now);
+  assert.deepEqual(r.dropped.map(d => d.why), ['its page wasn’t in the search results']);
+  const src = r.memory.sources.find(s => s.id === r.memory.facts.find(x => x.text.startsWith('Midwest'))!.sourceIds[0])!;
+  assert.equal(src.url, 'https://northwind.example/about');
+});

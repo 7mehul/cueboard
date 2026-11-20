@@ -63,18 +63,20 @@ const iso = (y: number, m: number, d: number) => `${y}-${pad(m + 1)}-${pad(d)}`;
 // such date on or before today: notes and emails are about the past.
 export function firstDate(t: string, today: string): string | null {
   const ty = +today.slice(0, 4);
+  const real = (y: number, m: number, d: number) => d <= new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
   const pick = (y: number | null, m: number, d: number) => {
     if (m < 0 || m > 11 || d < 1 || d > 31) return null;
-    if (y) return iso(y, m, d);
-    const guess = iso(ty, m, d);
-    return guess <= today ? guess : iso(ty - 1, m, d);
+    if (y) return real(y, m, d) ? iso(y, m, d) : null;
+    // Without a year, the most recent year it existed in ("Feb 29" is the last leap year's).
+    for (let yy = ty; yy > ty - 8; yy--) { const guess = iso(yy, m, d); if (real(yy, m, d) && guess <= today) return guess; }
+    return null;
   };
   const isoM = /\b(20\d{2})-(\d{2})-(\d{2})\b/.exec(t);
   // Month names as whole words, so "Maya" isn't May and "decided" isn't December.
   const named = [...t.matchAll(/\b(?:(\d{1,2})\s+)?(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b\.?(?:\s+(\d{1,2})(?:st|nd|rd|th)?\b)?(?:,?\s+(20\d{2}))?/gi)].find(x => x[1] || x[3]);
   const slash = /\b(\d{1,2})\/(\d{1,2})\/(20\d{2})\b/.exec(t);
   const found: { at: number; date: string | null }[] = [];
-  if (isoM) found.push({ at: isoM.index, date: iso(+isoM[1], +isoM[2] - 1, +isoM[3]) });
+  if (isoM) { const d = pick(+isoM[1], +isoM[2] - 1, +isoM[3]); if (d) found.push({ at: isoM.index, date: d }); }
   if (named) found.push({ at: named.index!, date: pick(named[4] ? +named[4] : null, MONTHS.indexOf(named[2].toLowerCase().slice(0, 3)), +(named[3] ?? named[1])) });
   if (slash) found.push({ at: slash.index, date: pick(+slash[3], +slash[1] - 1, +slash[2]) });
   return found.filter(f => f.date).sort((a, b) => a.at - b.at)[0]?.date ?? null;

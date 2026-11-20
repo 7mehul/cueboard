@@ -20,8 +20,12 @@ export interface MeetingRecord {
   sourceId: string;
   // Meetings from a connected calendar: the event they mirror, and whether it was called off,
   // declined or lost its outside guests since. The calendar is the truth for time and people.
-  calendar?: { id: string; url?: string; joinUrl?: string };
+  // `via: 'invite'`: added from an invite file, not seen in a calendar, so a calendar not listing
+  // it says nothing about whether it's still on.
+  calendar?: { id: string; url?: string; joinUrl?: string; via?: 'invite' };
   cancelled?: boolean;
+  // People someone added from a paste, kept on the meeting whatever the calendar's guest list says.
+  pastedAttendeeIds?: string[];
 }
 
 // The document itself, kept so the model can read it again when preparing for these people.

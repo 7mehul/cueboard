@@ -163,3 +163,15 @@ test('the model’s flat answer turns back into the same reading, with done and 
   a.facts.push({ about: 'p1', topic: 'gossip', text: 'Likes sailing', quote: 'Good energy.' });
   assert.ok(!fromAnswer(a, () => true).facts.some(f => f.text === 'Likes sailing'), 'a topic outside the list is left out');
 });
+
+test('names in any script are recognised, and numbers keep their sign and their "x"', () => {
+  const m: Memory = { ...emptyMemory('me'), people: [
+    { id: 'p-jose', name: 'José Álvarez', resolved: true }, { id: 'p-wang', name: '王伟', resolved: true }, { id: 'p-other', name: 'Dana Ruiz', resolved: true },
+  ] };
+  const prompt = readPrompt(m, { id: 'd', kind: 'notes', date: '2026-11-20', text: 'Call with José and 王伟 about the rollout.' });
+  assert.match(prompt, /José Álvarez/);
+  assert.match(prompt, /王伟/);
+  assert.doesNotMatch(prompt, /Dana Ruiz/);
+  assert.ok(numbersIn('Revenue grew 3x since spring').includes(3));
+  assert.ok(numbersIn('churn moved −1.5% this month').includes(1.5));
+});

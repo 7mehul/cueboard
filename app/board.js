@@ -2595,7 +2595,7 @@ async function syncCalendar(force) {
   if (!force && Date.now() - CAL.last < 4 * 60000) return;
   CAL.busy = true; queueToday();
   try {
-    const r = await fetch('/api/calendar/events', grHeaders);
+    const r = await fetch('/api/calendar/events?tz=' + encodeURIComponent(myZone()), grHeaders);
     const b = await r.json().catch(() => null);
     if (!r.ok || !b || !Array.isArray(b.events)) {
       const e = b && b.error;
@@ -2605,6 +2605,9 @@ async function syncCalendar(force) {
     }
     await (Mem.ready || (Mem.ready = loadMemory()));
     if (!Mem.data) return;
+    // A feed that doesn't say whose it is, and no address of yours to go on: you'd be a guest at
+    // every one of your own meetings.
+    if (!b.email && !(Mem.data.user && Mem.data.user.email)) { CAL.error = 'Add your email in About you (the boards menu), so Cueboard can tell you from your guests.'; return; }
     const s = Engine.syncCalendar(Mem.data, b.events, { now: new Date().toISOString(), from: b.from, to: b.to, selfEmail: b.email });
     if (b.email) CAL.email = b.email;
     if (JSON.stringify(s.memory) !== JSON.stringify(Mem.data)) { Mem.data = s.memory; await saveMemory(); }
@@ -2687,7 +2690,7 @@ async function connectLink(url) {
   if (!url.trim() || CAL.busy) return;
   CAL.busy = true; CAL.error = null; queueToday();
   try {
-    const r = await fetch('/api/calendar/link', { method: 'POST', headers: { 'content-type': 'application/json', 'x-cueboard': '1' }, body: JSON.stringify({ url }) });
+    const r = await fetch('/api/calendar/link?tz=' + encodeURIComponent(myZone()), { method: 'POST', headers: { 'content-type': 'application/json', 'x-cueboard': '1' }, body: JSON.stringify({ url }) });
     const b = await r.json().catch(() => null);
     if (!r.ok || !b || !b.ok) { CAL.error = (b && b.error && b.error.message) || 'Couldn’t read that calendar.'; return; }
     CAL.draft = ''; CAL.status = Object.assign({}, CAL.status, { connected: true, via: 'link' });
@@ -2714,17 +2717,24 @@ async function importInvites(text) {
   }
   let cal;
   const now = Date.now(), at = new Date(now).toISOString();
-  try { cal = Engine.parseIcs(text, { from: new Date(now - 864e5).toISOString(), to: new Date(now + 366 * 864e5).toISOString() }); }
-  catch (e) { toast((e && e.message) || 'That isn’t a calendar file.'); return; }
-  if (!cal.events.length) { toast('There’s no meeting ahead in that invite.'); return; }
-  const s = Engine.syncCalendar(Mem.data, cal.events, { now: at, from: at, to: at, selfEmail: self });
+  try { cal = Engine.parseIcs(text, { from: new Date(now - 3600e3).toISOString(), to: new Date(now + 366 * 864e5).toISOString() }, { zone: myZone() }); }
+  catch (e) { toast((e && e.message) || 'That isn’t a calendar file.'); return false; }
+  // A repeating invite brings its next two meetings, not a year of them.
+  const per = new Map();
+  const events = cal.events.filter(ev => { const k = ev.id.replace(/_\d{8}T\d{6}Z$/, ''); const n = per.get(k) || 0; per.set(k, n + 1); return n < 2; });
+  if (!events.length) { toast('There’s no meeting ahead in that invite.'); return false; }
+  const s = Engine.syncCalendar(Mem.data, events, { now: at, from: at, to: at, selfEmail: self, via: 'invite' });
   const fresh = [...s.added, ...s.changed];
   if (!fresh.length) { toast('Nothing new: it’s already in your meetings, or it’s only with people from your company.'); return; }
   Mem.data = s.memory; await saveMemory();
   const titles = fresh.map(id => (Mem.data.meetings.find(m => m.id === id) || {}).title).filter(Boolean);
   toast(`Added ${titles.slice(0, 2).join(' and ')}${titles.length > 2 ? ` and ${titles.length - 2} more` : ''}. Drafting the board…`);
-  for (const id of s.added) makeFromToday(id);
+  // The soonest gets its board now; the rest are drafted when their day comes.
+  const soonest = s.added.map(id => Mem.data.meetings.find(m => m.id === id)).filter(Boolean).sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt))[0];
+  if (soonest) makeFromToday(soonest.id);
+  return true;
 }
+const myZone = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (_) { return ''; } };
 const isInvite = t => /BEGIN:VCALENDAR/i.test(t) && /BEGIN:VEVENT/i.test(t);
 
 // Drafting without being asked: one board at a time, soonest meeting first. A board that's on

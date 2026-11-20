@@ -6,7 +6,10 @@ import type { CalendarEvent, CalendarPerson } from './calendar.ts';
 // into the same events Google's API gives, so the rest of Cueboard can't tell them apart.
 // Repeating meetings become one event per occurrence, with moved and cancelled ones applied.
 
-export interface IcsCalendar { email?: string; events: CalendarEvent[] }
+// `complete` is false when the window held more events than are returned; the caller then knows
+// a meeting missing from the list may simply not have been read.
+export interface IcsCalendar { email?: string; events: CalendarEvent[]; complete: boolean }
+const MAX_EVENTS = 3000;
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PARTSTAT: Record<string, CalendarPerson['response']> = { ACCEPTED: 'accepted', DECLINED: 'declined', TENTATIVE: 'tentative', 'NEEDS-ACTION': 'needsAction' };
@@ -33,23 +36,26 @@ function offsetAt(t: number, zone: string): number {
     .formatToParts(new Date(t)).map(x => [x.type, x.value]));
   return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second) - t;
 }
+// Around a clock change the first guess at the offset can come from the wrong side, so both are
+// tried; a time that doesn't exist (2:30 on the spring-forward night) moves forward, as clocks do.
 function zoned(t: ICAL.Time, zone: string): number | null {
   try {
     const wall = Date.UTC(t.year, t.month - 1, t.day, t.hour, t.minute, t.second);
-    let at = wall - offsetAt(wall, zone);
-    const again = wall - offsetAt(at, zone);
-    if (again !== at) at = again;
-    return at;
+    const a = wall - offsetAt(wall, zone), b = wall - offsetAt(a, zone);
+    const exact = [b, a].find(x => x + offsetAt(x, zone) === wall);
+    return exact ?? Math.max(a, b);
   } catch { return null; } // not a zone this runtime knows
 }
 
 // When an occurrence happens. A zone the feed defined, or UTC, ical.js converts itself; a zone it
-// only named is looked up; a time with no zone at all is taken as this machine's local time.
+// only named is looked up; a time with no zone at all is in the calendar's own zone (its
+// X-WR-TIMEZONE, or the one the person reading it is in), and only failing both, this machine's.
+let floatingZone: string | undefined;
 function instant(t: ICAL.Time): number {
   const tz = t.zone?.tzid;
   if (tz && tz !== 'floating') return t.toJSDate().getTime();
   const named = (t as unknown as { timezone?: string }).timezone;
-  const zone = named ? WINDOWS[named] ?? named : undefined;
+  const zone = named ? WINDOWS[named] ?? named : floatingZone;
   const at = zone ? zoned(t, zone) : null;
   return at ?? t.toJSDate().getTime();
 }
@@ -61,7 +67,7 @@ function people(e: ICAL.Event): CalendarPerson[] {
   const out: CalendarPerson[] = [];
   for (const p of e.attendees) {
     const cutype = String(p.getParameter('cutype') ?? 'INDIVIDUAL').toUpperCase();
-    if (cutype === 'ROOM' || cutype === 'RESOURCE') continue;
+    if (cutype === 'ROOM' || cutype === 'RESOURCE' || cutype === 'GROUP') continue; // rooms, and mailing lists aren't people
     const email = mail(p.getFirstValue());
     if (!email || out.some(x => x.email === email)) continue;
     const cn = p.getParameter('cn'), ps = PARTSTAT[String(p.getParameter('partstat') ?? '').toUpperCase()];
@@ -99,69 +105,114 @@ function toEvent(id: string, item: ICAL.Event, start: ICAL.Time, end: ICAL.Time)
   };
 }
 
-// Everything that happens between two instants. Only the window is expanded, so a weekly meeting
-// that has run for years costs no more than one that started last week.
-export function parseIcs(text: string, window: { from: string; to: string }): IcsCalendar {
+// Everything that happens between two instants. Repeating meetings are stepped through cheaply up
+// to the window and worked out properly only inside it, so a weekly meeting that has run for
+// years costs little more than one that started last week.
+export function parseIcs(text: string, window: { from: string; to: string }, opts: { zone?: string } = {}): IcsCalendar {
   let root: ICAL.Component;
   try { root = new ICAL.Component(ICAL.parse(text)); } catch { throw new Error('That isn’t a calendar file.'); }
   if (root.name !== 'vcalendar') throw new Error('That isn’t a calendar file.');
-  for (const tz of root.getAllSubcomponents('vtimezone')) { try { ICAL.TimezoneService.register(tz); } catch { /* a zone ical.js can't read falls back to its name */ } }
-  const from = Date.parse(window.from), to = Date.parse(window.to);
+  // ical.js keeps zones in one registry for the whole process: this feed's zones are this feed's.
+  ICAL.TimezoneService.reset();
+  try {
+    for (const tz of root.getAllSubcomponents('vtimezone')) { try { ICAL.TimezoneService.register(tz); } catch { /* falls back to its name */ } }
+    const calZone = root.getFirstPropertyValue('x-wr-timezone');
+    floatingZone = [typeof calZone === 'string' ? calZone : undefined, opts.zone].find(z => !!z && validZone(z));
+    return read(root, window);
+  } finally { ICAL.TimezoneService.reset(); floatingZone = undefined; }
+}
+const validZone = (z: string) => { try { new Intl.DateTimeFormat('en-US', { timeZone: z }); return true; } catch { return false; } };
+
+function read(root: ICAL.Component, window: { from: string; to: string }): IcsCalendar {
+  const from = Date.parse(window.from), to = Date.parse(window.to), DAY = 864e5;
   const inWindow = (s: number, e: number) => e > from && s < to;
 
   // A moved or cancelled occurrence of a repeating meeting is its own VEVENT, tied by UID.
-  const byUid = new Map<string, { master?: ICAL.Event; moved: ICAL.Event[] }>();
+  const byUid = new Map<string, { masters: ICAL.Event[]; moved: ICAL.Event[] }>();
   for (const v of root.getAllSubcomponents('vevent')) {
-    const e = new ICAL.Event(v);
-    if (!e.uid || !v.getFirstProperty('dtstart')) continue;
-    // Google's feed adds "@google.com" to the event id its API uses; without it, the ids match
-    // (repeats too: "<id>_<start in UTC>"), so switching between the two doesn't duplicate meetings.
-    const uid = e.uid.replace(/@google\.com$/i, '');
-    const g = byUid.get(uid) ?? { moved: [] };
-    if (e.isRecurrenceException()) g.moved.push(e); else g.master = e;
-    byUid.set(uid, g);
+    try {
+      const e = new ICAL.Event(v);
+      if (!e.uid || !v.getFirstProperty('dtstart')) continue;
+      // Google's feed adds "@google.com" to the event id its API uses; without it, the ids match
+      // (repeats too: "<id>_<start in UTC>"), so switching between the two doesn't duplicate meetings.
+      const uid = e.uid.replace(/@google\.com$/i, '');
+      const g = byUid.get(uid) ?? { masters: [], moved: [] };
+      if (e.isRecurrenceException()) g.moved.push(e); else g.masters.push(e);
+      byUid.set(uid, g);
+    } catch { /* an event ical.js can't read is left out, not the whole calendar */ }
   }
 
   const events: CalendarEvent[] = [];
+  const seen = new Set<string>();
+  const add = (id: string, item: ICAL.Event, start: ICAL.Time, end: ICAL.Time) => {
+    if (seen.has(id)) return;
+    const s = instant(start), e = instant(end);
+    if (!inWindow(s, e)) return;
+    seen.add(id);
+    events.push(toEvent(id, item, start, end));
+  };
   for (const [uid, g] of byUid) {
-    if (!g.master) { // occurrences whose series isn't in the file stand on their own
-      for (const m of g.moved) { const s = m.startDate, e = m.endDate ?? s; if (inWindow(instant(s), instant(e))) events.push(toEvent(`${uid}_${stamp(m.recurrenceId)}`, m, s, e)); }
-      continue;
-    }
-    const master = g.master;
-    for (const m of g.moved) master.relateException(m);
-    if (!master.isRecurring()) {
-      const s = master.startDate, e = master.endDate ?? s;
-      if (inWindow(instant(s), instant(e))) events.push(toEvent(uid, master, s, e));
-      continue;
-    }
-    const it = master.iterator();
-    for (let next = it.next(), n = 0; next && n < 20000; next = it.next(), n++) {
-      const d = master.getOccurrenceDetails(next);
-      const s = instant(d.startDate), e = instant(d.endDate ?? d.startDate);
-      // A moved occurrence can land in the window from outside it, so look a little past the end.
-      if (instant(next) > to + 31 * 864e5) break;
-      if (inWindow(s, e)) events.push(toEvent(`${uid}_${stamp(d.recurrenceId)}`, d.item, d.startDate, d.endDate ?? d.startDate));
-    }
+    try {
+      // The same UID twice without a recurrence id: two events, not one replacing the other.
+      g.masters.forEach((master, n) => {
+        const id = n ? `${uid}-${n + 1}` : uid;
+        if (n === 0) for (const m of g.moved) { try { master.relateException(m); } catch { /* ignore a broken override */ } }
+        if (!master.isRecurring()) { add(id, master, master.startDate, master.endDate ?? master.startDate); return; }
+        const it = master.iterator(fastForward(master, from - 2 * DAY));
+        for (let next = it.next(), steps = 0; next && steps < 200_000; next = it.next(), steps++) {
+          const rough = next.toUnixTime() * 1000; // close enough to know how far from the window it is
+          if (rough > to + 2 * DAY) break;
+          if (rough < from - 2 * DAY) continue;
+          const d = master.getOccurrenceDetails(next);
+          add(`${id}_${stamp(d.recurrenceId)}`, d.item, d.startDate, d.endDate ?? d.startDate);
+        }
+      });
+      // Moved occurrences whose original date is far from the window but which land in it, and
+      // occurrences whose series isn't in the file at all.
+      for (const m of g.moved) { try { add(`${uid}_${stamp(m.recurrenceId)}`, m, m.startDate, m.endDate ?? m.startDate); } catch { /* skip it */ } }
+    } catch { /* one broken series doesn't take the rest of the calendar with it */ }
   }
   events.sort((a, b) => Date.parse(a.start) - Date.parse(b.start) || a.id.localeCompare(b.id));
-  return { ...whoseIs(root, events), events: events.slice(0, 2000) };
+  return { ...whoseIs(root, events), events: events.slice(0, MAX_EVENTS), complete: events.length <= MAX_EVENTS };
+}
+
+// A daily or weekly series with no fixed count repeats exactly every period, so it can start from
+// a whole number of periods later, just before the window, instead of from its first day. Local
+// wall time is kept, so a 9am meeting stays at 9am across clock changes. Anything else (counts,
+// monthly, yearly) starts from the beginning; those are few steps anyway.
+function fastForward(master: ICAL.Event, before: number): ICAL.Time | undefined {
+  const rules = master.component.getAllProperties('rrule').map(p => p.getFirstValue() as ICAL.Recur);
+  if (rules.length !== 1 || master.component.getFirstProperty('rdate')) return undefined;
+  const r = rules[0];
+  if (r.count || (r.freq !== 'DAILY' && r.freq !== 'WEEKLY')) return undefined;
+  const days = (r.interval || 1) * (r.freq === 'WEEKLY' ? 7 : 1);
+  const start = master.startDate;
+  const periods = Math.floor((before - instant(start)) / (days * 864e5)) - 1;
+  if (periods <= 0) return undefined;
+  const t = start.clone();
+  t.adjust(periods * days, 0, 0, 0);
+  return t;
 }
 
 const stamp = (t: ICAL.Time) => new Date(instant(t)).toISOString().replace(/[-:]|\.\d+/g, '');
 
-// Whose calendar it is: Google names the main calendar after its owner's address; otherwise the
-// one guest on nearly every meeting with others is the owner. Marked so they're never a guest.
+// Whose calendar it is: Google names the main calendar after its owner's address. Otherwise it's
+// the one person on most of the series that have other guests, and only if no one else ties
+// with them. A guess: whoever reads the calendar prefers an address they already know.
 function whoseIs(root: ICAL.Component, events: CalendarEvent[]): { email?: string } {
   const name = mail(root.getFirstPropertyValue('x-wr-calname'));
-  let email = name ?? undefined;
-  if (!email) {
-    const shared = events.filter(e => e.attendees.length >= 2);
-    const count = new Map<string, number>();
-    for (const e of shared) for (const a of e.attendees) count.set(a.email, (count.get(a.email) ?? 0) + 1);
-    const [top, n] = [...count].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0] ?? [];
-    if (top && shared.length >= 2 && n! >= shared.length * 0.6) email = top;
+  if (name) return { email: name };
+  const series = new Map<string, Set<string>>();
+  for (const e of events) {
+    if (e.attendees.length < 2) continue;
+    const key = e.id.replace(/_\d{8}T\d{6}Z$/, '');
+    const s = series.get(key) ?? new Set<string>();
+    for (const a of e.attendees) s.add(a.email);
+    series.set(key, s);
   }
-  if (email) for (const e of events) for (const a of e.attendees) if (a.email === email) a.self = true;
-  return email ? { email } : {};
+  const count = new Map<string, number>();
+  for (const s of series.values()) for (const a of s) count.set(a, (count.get(a) ?? 0) + 1);
+  const [first, second] = [...count].sort((a, b) => b[1] - a[1]);
+  if (!first || series.size < 2 || first[1] < series.size * 0.6 || (second && second[1] === first[1])) return {};
+  return { email: first[0] };
 }

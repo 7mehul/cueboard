@@ -36,6 +36,12 @@ const quarter = (t: number, up: boolean) => { const q = 15 * 60_000; return new 
 
 export function demoWorld(now = new Date()): DemoWorld {
   const D = (days: number, h?: number, m?: number) => at(now, days, h, m);
+  // Months named in the documents, counted back from today, so the week reads right in any month.
+  const monthName = (d: Date) => d.toLocaleDateString('en-US', { month: 'long' });
+  const monthEnd = (d: Date) => new Date(d.getFullYear(), d.getMonth() + 1, 0, 12);
+  const early = monthEnd(D(-170)), recent = monthEnd(D(-60)), afterRecent = new Date(recent.getFullYear(), recent.getMonth() + 1, 1, 12);
+  const longDay = (d: Date) => d.toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
+  const renewal = D(25), decision = D(12);
   const today = D(0);
 
   // ---------- what memory already holds ----------
@@ -44,7 +50,7 @@ export function demoWorld(now = new Date()): DemoWorld {
 To: Maya Chen <maya@larkspur.example>, Alex Rivera <alex@cueboard.example>
 Subject: Intro: Alex (Cueboard) <> Maya (Larkspur)
 
-Maya, meet Alex. Alex is building Cueboard, meeting prep boards for founders and sales teams. They've grown MRR from $12k in May to $31k in September with no paid marketing.
+Maya, meet Alex. Alex is building Cueboard, meeting prep boards for founders and sales teams. They've grown MRR from $12k in ${monthName(early)} to $31k in ${monthName(recent)} with no paid marketing.
 
 Alex, Maya is a partner at Larkspur and led the seed rounds for Fieldwork and Loomwise. She's been looking at tools that sit on top of the calendar.
 
@@ -62,8 +68,8 @@ Sam` },
         { about: 'p1', topic: 'interest', text: 'Looking at tools that sit on top of the calendar', quote: 'looking at tools that sit on top of the calendar' },
       ],
       numbers: [
-        { owner: 'self', label: 'MRR', value: 12000, prefix: '$', suffix: '', asOf: `${now.getFullYear()}-05-31`, better: 'up', sharedWith: [], quote: 'MRR from $12k in May' },
-        { owner: 'self', label: 'MRR', value: 31000, prefix: '$', suffix: '', asOf: `${now.getFullYear()}-09-30`, better: 'up', sharedWith: [], quote: '$31k in September' },
+        { owner: 'self', label: 'MRR', value: 12000, prefix: '$', suffix: '', asOf: ymd(early), better: 'up', sharedWith: [], quote: `MRR from $12k in ${monthName(early)}` },
+        { owner: 'self', label: 'MRR', value: 31000, prefix: '$', suffix: '', asOf: ymd(recent), better: 'up', sharedWith: [], quote: `$31k in ${monthName(recent)}` },
       ],
     },
   };
@@ -153,7 +159,7 @@ Subject: Re: Brightline renewal
 
 Hi Alex,
 
-Quick heads-up before our check-in. Active seats are down to 32 since the Phoenix teams paused. Our renewal date is November 15, and Sofia Marin from procurement will join the next call.
+Quick heads-up before our check-in. Active seats are down to 32 since the Phoenix teams paused. Our renewal date is ${longDay(renewal)}, and Sofia Marin from procurement will join the next call.
 
 We still need an answer on SSO before we can renew.
 
@@ -165,7 +171,7 @@ Jordan` },
       companies: [{ ref: 'c1', knownId: null, name: 'Brightline Health', domain: null }],
       facts: [
         { about: 'p2', topic: 'role', text: 'Procurement at Brightline Health', quote: 'Sofia Marin from procurement will join the next call.' },
-        { about: 'c1', topic: 'decision', text: 'Renewal date is November 15', quote: 'Our renewal date is November 15' },
+        { about: 'c1', topic: 'decision', text: `Renewal date is ${longDay(renewal)}`, quote: `Our renewal date is ${longDay(renewal)}` },
       ],
       numbers: [{ owner: 'c1', label: 'Active seats', value: 32, prefix: '', suffix: '', asOf: ymd(D(-6)), better: 'up', sharedWith: [], quote: 'Active seats are down to 32 since the Phoenix teams paused.' }],
     },
@@ -218,7 +224,7 @@ Small-team churn: 2.6%` },
 
 - Good energy. She's done 3 seed deals in workflow tools this year.
 - Asked twice about churn in small teams. We're at 3.1% monthly for teams under 10 seats.
-- Told her MRR is $33k as of October 1.
+- Told her MRR is $33k as of ${longDay(afterRecent)}.
 - Pushback: "Isn't this just a feature Zoom will add?" I said we work across Zoom, Meet and Teams, and 4 of our 10 biggest accounts use two of them.
 - She wants to see a cohort table before taking it to partners.
 - I'll send the cohort table by Friday.
@@ -239,7 +245,7 @@ Small-team churn: 2.6%` },
       ],
       numbers: [
         { owner: 'self', label: 'Small-team churn', value: 3.1, prefix: '', suffix: '%', asOf: ymd(mayaCall), better: 'down', sharedWith: ['p1'], quote: "We're at 3.1% monthly for teams under 10 seats." },
-        { owner: 'self', label: 'MRR', value: 33000, prefix: '$', suffix: '', asOf: `${now.getFullYear()}-10-01`, better: 'up', sharedWith: ['p1'], quote: 'Told her MRR is $33k as of October 1.' },
+        { owner: 'self', label: 'MRR', value: 33000, prefix: '$', suffix: '', asOf: ymd(afterRecent), better: 'up', sharedWith: ['p1'], quote: `Told her MRR is $33k as of ${longDay(afterRecent)}.` },
       ],
       promises: [
         { by: 'user', personRef: 'p1', text: 'Send the cohort table', due: ymd(next(mayaCall, 5)), quote: "I'll send the cohort table by Friday." },
@@ -304,18 +310,18 @@ Subject: Brightline renewal: pricing
 
 Hi Alex,
 
-Ahead of today's call: to renew, we'd need a 15% discount at 32 seats, and a decision by November 10. Jordan tells me SSO is still the blocker for IT.
+Ahead of today's call: to renew, we'd need a 15% discount at 32 seats, and a decision by ${longDay(decision)}. Jordan tells me SSO is still the blocker for IT.
 
 Thanks,
 Sofia` },
     ideal: {
       ...none, summary: 'Sofia’s pricing ask before the check-in',
-      happened: { kind: 'email', date: ymd(today), summary: 'Wants 15% off at 32 seats; decision by Nov 10', peopleRefs: ['p1', 'p2'], quote: "to renew, we'd need a 15% discount at 32 seats" },
+      happened: { kind: 'email', date: ymd(today), summary: `Wants 15% off at 32 seats; decision by ${short(decision)}`, peopleRefs: ['p1', 'p2'], quote: "to renew, we'd need a 15% discount at 32 seats" },
       people: [{ ref: 'p1', knownId: null, name: 'Sofia Marin', email: 'sofia.marin@brightlinehealth.example', companyRef: 'c1' }, { ref: 'p2', knownId: null, name: 'Jordan Ellis', email: 'jordan.ellis@brightlinehealth.example', companyRef: 'c1' }],
       companies: [{ ref: 'c1', knownId: null, name: 'Brightline Health', domain: null }],
       facts: [
         { about: 'p1', topic: 'ask', text: 'Wants a 15% discount to renew at 32 seats', quote: "to renew, we'd need a 15% discount at 32 seats" },
-        { about: 'c1', topic: 'decision', text: 'Needs a decision by November 10', quote: 'a decision by November 10' },
+        { about: 'c1', topic: 'decision', text: `Needs a decision by ${longDay(decision)}`, quote: `a decision by ${longDay(decision)}` },
       ],
       objections: [{ text: 'SSO still blocks IT', raisedByRef: 'p1', answer: null, quote: 'Jordan tells me SSO is still the blocker for IT.' }],
     },

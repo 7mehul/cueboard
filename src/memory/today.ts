@@ -36,6 +36,9 @@ const dayOf = (iso: string) => {
 
 export function todayModel(memory: Memory, now: string, withBoards: string[]): TodayModel {
   const t = ms(now), today = dayStart(t);
+  // The next midnights by the calendar, not by adding 24 hours: a clock change makes a day 23 or 25.
+  const nextDay = (d: number, n: number) => { const x = new Date(d); x.setDate(x.getDate() + n); return x.getTime(); };
+  const tomorrow = nextDay(today, 1), weekEnd = nextDay(today, 7);
   const people = new Map(memory.people.map(p => [p.id, p]));
   const made = new Set(withBoards);
   const end = (m: MeetingRecord) => ms(m.startsAt) + m.durationMin * 60_000;
@@ -77,7 +80,7 @@ export function todayModel(memory: Memory, now: string, withBoards: string[]): T
       if (t - end(m) < 3 * DAY && !hasNotes(m)) buckets.earlier.push(describe(m));
       continue;
     }
-    const key = day === today ? 'today' : day === today + DAY ? 'tomorrow' : day < today + 7 * DAY ? 'week' : 'later';
+    const key = day === today ? 'today' : day === tomorrow ? 'tomorrow' : day < weekEnd ? 'week' : 'later';
     if (key !== 'later' || buckets.later.length < 5) buckets[key].push(describe(m));
   }
   const LABEL: Record<TodaySection['key'], string> = { earlier: 'Waiting for your notes', today: 'Today', tomorrow: 'Tomorrow', week: 'Later this week', later: 'Coming up' };

@@ -50,7 +50,9 @@ const clip = (t: string, n: number) => (t.length > n ? t.slice(0, n - 1) + '…'
 // open with them. Keeps the prompt small as memory grows, and keeps unrelated people out of it.
 function relevant(memory: Memory, doc: Doc) {
   const text = normalize(doc.text), raw = doc.text.toLowerCase();
-  const named = (name: string) => { const parts = normalize(name).split(' ').filter(w => w.length > 2); return parts.length > 0 && parts.some(w => new RegExp(`\\b${w}\\b`).test(text)); };
+  // Whole words in any script ("\b" only knows ASCII, so it missed José and 王伟).
+  const word = (w: string) => new RegExp(`(?<![\\p{L}\\p{N}])${w}(?![\\p{L}\\p{N}])`, 'u');
+  const named = (name: string) => { const parts = normalize(name).split(' ').filter(w => w.length > 2 || /[^\p{Script=Latin}\p{N}]/u.test(w)); return parts.length > 0 && parts.some(w => word(w).test(text)); };
   const people = memory.people.filter(p => named(p.name) || (p.email && raw.includes(p.email.toLowerCase())));
   const ids = new Set(people.map(p => p.id));
   const companyIds = new Set(people.map(p => p.companyId).filter(Boolean));
@@ -123,7 +125,7 @@ export const inDocument = (docText: string, quote: string) => {
 // Every number written in a piece of text, with "k", "m" and "bn" applied, so 40800 matches "$40.8k".
 export function numbersIn(text: string): number[] {
   const out: number[] = [];
-  for (const m of text.matchAll(/(\d[\d,]*(?:\.\d+)?)\s*(k|m|mm|bn|b|thousand|million|billion)?(?![a-z])/gi)) {
+  for (const m of text.matchAll(/(\d[\d,]*(?:\.\d+)?)\s*(k|m|mm|bn|b|thousand|million|billion)?(?!(?!x\b)[a-z])/gi)) {
     const v = parseFloat(m[1].replace(/,/g, ''));
     const u = (m[2] ?? '').toLowerCase();
     const mult = u === 'k' || u === 'thousand' ? 1e3 : u === 'm' || u === 'mm' || u === 'million' ? 1e6 : u === 'b' || u === 'bn' || u === 'billion' ? 1e9 : 1;
@@ -204,7 +206,8 @@ export function propose(memory: Memory, doc: Doc, x: Extraction): Proposal {
     const what = `number ${v.label} ${fmtValue(v.value, v.prefix, v.suffix)}`;
     if (!v.label.trim() || !Number.isFinite(v.value) || !quoted(what, v.quote)) continue;
     // The number itself has to be in the quote: the model may not do arithmetic or round.
-    if (!numbersIn(v.quote).some(k => near(k, v.value))) { dropped.push({ what, why: 'number_not_in_quote' }); continue; }
+    // Signs are written many ways (−1.5%, "down 1.5%"), so the size is what has to be there.
+    if (!numbersIn(v.quote).some(k => near(k, Math.abs(v.value)))) { dropped.push({ what, why: 'number_not_in_quote' }); continue; }
     if (!subjectOk(v.owner) && !userRefs.has(v.owner)) { dropped.push({ what, why: 'unknown_reference' }); continue; }
     const owner = userRefs.has(v.owner) ? 'self' : asSelf(v.owner);
     const date = dateOr(v.asOf, docDate);

@@ -34,7 +34,9 @@ export const companyDomain = (email: string) => { const d = domainOf(email); ret
 const isResource = (email: string) => /@resource\.calendar\.google\.com$|@group\.calendar\.google\.com$/i.test(email);
 
 const slug = (t: string) => normalize(t).replace(/ /g, '-').slice(0, 32) || 'x';
-const safeId = (id: string) => id.replace(/[^\w-]/g, '-').slice(0, 60);
+// Event ids made safe for record ids; a long one (Outlook's run past 100 characters) keeps a hash
+// of the whole thing, so two events that start alike don't become one.
+const safeId = (id: string) => { const s = id.replace(/[^\w-]/g, '-'); return s.length <= 60 ? s : `${s.slice(0, 44)}-${hash(id)}`; };
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 // "maya.chen@larkspur.example" → "Maya Chen", for guests without a display name.
@@ -55,15 +57,23 @@ export function cleanDescription(text: string | undefined): string {
   if (!text) return '';
   const plain = text.replace(/<br\s*\/?>/gi, '\n').replace(/<\/(p|div|li)>/gi, '\n').replace(/<[^>]+>/g, '')
     .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
-  const noise = /https?:\/\/|meeting id|passcode|password:|dial[- ]in|one tap|tap mobile|join (zoom|with|by|the|microsoft|on)|microsoft teams|google meet|meet\.google|zoom\.us|teams\.microsoft|^\+?\d[\d\s,#*()-]{6,}$|^[-_─=*•.]{3,}$|find your local number|meeting options|need help\?|learn more|click here|conference id|pin:|^or call|^or dial|invited you|reply for|more phone numbers|^\s*#+\s*$/i;
-  return plain.split('\n').map(l => l.trim()).filter(l => l && !noise.test(l)).join('\n').replace(/\n{3,}/g, '\n\n').trim().slice(0, 4000);
+  // Lines that are dial-in details wherever the words fall, and short lines that read like a
+  // calendar's boilerplate; a real sentence that happens to say "learn more" stays.
+  const noise = /https?:\/\/|meeting id|passcode|password:|dial[- ]in|meet\.google|zoom\.us|teams\.microsoft|^\+?\d[\d\s,#*()-]{6,}$|^[-_─=*•.:~]{3,}|find your local number|conference id|\bpin:|more phone numbers|^\s*#+\s*$/i;
+  const boilerplate = /^(join (zoom|with|by|the|microsoft|on)\b|microsoft teams|google meet|one tap|tap mobile|meeting options|need help\?|learn more|click here|or call|or dial|reply for|.*invited you)/i;
+  return plain.split('\n').map(l => l.trim())
+    .filter(l => l && !noise.test(l) && !(boilerplate.test(l) && l.split(/\s+/).length <= 10))
+    .join('\n').replace(/\n{3,}/g, '\n\n').trim().slice(0, 4000);
 }
 
 const sameTitle = (a: string, b: string) => normalize(a) === normalize(b);
 
-export function syncCalendar(memory: Memory, events: CalendarEvent[], opts: { now: string; from: string; to: string; selfEmail?: string }): CalendarSync {
+// `via: 'invite'` for events from an invite file: they're added and updated, never cancelled by a
+// calendar that doesn't list them. `selfEmail` is what the calendar says; an address the user
+// gave wins over it, since a feed's owner can only be guessed.
+export function syncCalendar(memory: Memory, events: CalendarEvent[], opts: { now: string; from: string; to: string; selfEmail?: string; via?: 'invite' }): CalendarSync {
   const m: Memory = structuredClone(memory);
-  const self = (opts.selfEmail || m.user?.email || '').toLowerCase();
+  const self = (m.user?.email || opts.selfEmail || '').toLowerCase();
   if (self && m.user && !m.user.email) m.user.email = self;
   const ownDomain = companyDomain(self);
   const today = opts.now.slice(0, 10);
@@ -97,7 +107,7 @@ export function syncCalendar(memory: Memory, events: CalendarEvent[], opts: { no
   };
 
   for (const ev of events) {
-    if (!ev.id || !ev.start || !ev.end) continue;
+    if (!ev.id || !Number.isFinite(ms(ev.start)) || !Number.isFinite(ms(ev.end))) continue;
     seen.add(ev.id);
     const existing = m.meetings.find(x => x.calendar?.id === ev.id)
       ?? m.meetings.find(x => !x.calendar && sameTitle(x.title, ev.title) && ms(x.startsAt) === ms(ev.start));
@@ -117,13 +127,16 @@ export function syncCalendar(memory: Memory, events: CalendarEvent[], opts: { no
 
     const attendeeIds = [...new Set(guests.map(personFor))];
     const durationMin = Math.min(600, Math.max(5, Math.round((ms(ev.end) - ms(ev.start)) / 60_000)));
-    const calendar = { id: ev.id, ...(ev.url ? { url: ev.url } : {}), ...(ev.joinUrl ? { joinUrl: ev.joinUrl } : {}) };
+    // An invite file never takes a meeting a calendar already has; a calendar takes over one an invite brought.
+    const fromInvite = opts.via === 'invite' && (!existing?.calendar || existing.calendar.via === 'invite');
+    const calendar = { id: ev.id, ...(ev.url ? { url: ev.url } : {}), ...(ev.joinUrl ? { joinUrl: ev.joinUrl } : {}), ...(fromInvite ? { via: 'invite' as const } : {}) };
     let id: string;
     if (existing) {
       id = existing.id;
       const before = JSON.stringify([existing.title, ms(existing.startsAt), existing.durationMin, [...existing.attendeeIds].sort(), !!existing.cancelled]);
-      // People someone added from a paste stay; the calendar adds its guests to them.
-      const people = existing.calendar ? attendeeIds : [...new Set([...existing.attendeeIds, ...attendeeIds])];
+      // People someone added from a paste stay, on every sync; the calendar's guests join them.
+      if (!existing.calendar) { const pasted = existing.attendeeIds.filter(id => !attendeeIds.includes(id)); if (pasted.length) existing.pastedAttendeeIds = pasted; }
+      const people = [...new Set([...attendeeIds, ...(existing.pastedAttendeeIds ?? [])])];
       Object.assign(existing, { title: ev.title || existing.title, startsAt: ev.start, durationMin, attendeeIds: people, calendar });
       delete existing.cancelled;
       if (JSON.stringify([existing.title, ms(existing.startsAt), existing.durationMin, [...existing.attendeeIds].sort(), false]) !== before) changed.push(id);
@@ -149,7 +162,7 @@ export function syncCalendar(memory: Memory, events: CalendarEvent[], opts: { no
 
   // An event that was in this stretch of the calendar and isn't any more was deleted.
   for (const x of m.meetings) {
-    if (!x.calendar || x.cancelled || seen.has(x.calendar.id)) continue;
+    if (!x.calendar || x.calendar.via === 'invite' || x.cancelled || seen.has(x.calendar.id)) continue;
     const t = ms(x.startsAt);
     if (t >= ms(opts.from) && t < ms(opts.to)) { x.cancelled = true; cancelled.push(x.id); }
   }

@@ -20,20 +20,20 @@ const rest = (e: El) => j(Object.keys(e).filter(k => !STYLE.has(k) && !LISTS.has
 const content = (e: El) => j(Object.keys(e).filter(k => !STYLE.has(k)).sort().map(k => [k, e[k]]));
 
 // Labelled lines ("Goal", "Where we left off") are matched by label, the rest by what they say,
-// so a question ticked off keeps its place.
+// so a question ticked off keeps its place. Two lines that say the same are told apart by order.
 const keyOf = (l: Line) => (typeof l.label === 'string' && l.label ? 'L:' + l.label : 'T:' + String(l.text ?? ''));
+const keyed = (ls: Line[]) => { const n = new Map<string, number>(); return ls.map(l => { const k = keyOf(l), i = n.get(k) ?? 0; n.set(k, i + 1); return [`${k}#${i}`, l] as const; }); };
 function mergeLines(mine: Line[], drafted: Line[], next: Line[]): Line[] {
-  const map = (ls: Line[]) => new Map(ls.map(l => [keyOf(l), l]));
-  const was = map(drafted), have = map(mine), will = map(next);
+  const was = new Map(keyed(drafted)), have = new Map(keyed(mine)), coming = keyed(next), will = new Map(coming);
   const out: Line[] = [];
-  for (const n of next) {
-    const k = keyOf(n), c = have.get(k), b = was.get(k);
+  for (const [k, n] of coming) {
+    const c = have.get(k), b = was.get(k);
     if (c && b) out.push(j(c) === j(b) ? n : c);   // yours if you changed it, else the new version
     else if (c) out.push(c);
     else if (!b) out.push(n);                      // new; one you deleted stays deleted
   }
-  for (const c of mine) {
-    const k = keyOf(c), b = was.get(k);
+  for (const [k, c] of keyed(mine)) {
+    const b = was.get(k);
     if (will.has(k)) continue;
     if (!b || j(b) !== j(c)) out.push(c);          // your own lines, and ones you changed that the engine dropped
   }
@@ -48,6 +48,7 @@ export function mergeRefresh(current: El[], drafted: El[], next: El[]): Refreshe
   const fresh = new Map(next.map(e => [e.id, e]));
   const out: El[] = [];
   let updated = 0, added = 0, removed = 0, kept = 0;
+  const followed: El[] = [];
   for (const e of current) {
     const was = before.get(e.id), now = fresh.get(e.id);
     if (!was || was.type !== e.type) { out.push(e); continue; }
@@ -70,13 +71,15 @@ export function mergeRefresh(current: El[], drafted: El[], next: El[]): Refreshe
     // A new goal can reorder the plan. A card still in the column it was drafted in follows its
     // part to the new column; one the user moved sideways stays where they put it.
     const follows = e.x === was.x && now.x !== was.x;
-    if (follows) { m.x = now.x; m.y = now.y; }
+    if (follows) { m.x = now.x; m.y = now.y; followed.push(m); }
     const resized = e.w === was.w && now.w !== was.w; // likewise a width nobody changed
     if (resized) m.w = now.w;
     if (content(m) !== content(e) || follows || resized) updated++;
     if (touched) kept++;
     out.push(m);
   }
+  // A card that followed its part to a new column moves down if something of yours is already there.
+  for (const m of followed) { const i = out.indexOf(m); out[i] = placeClear(m, out.filter(o => o !== m)); }
   for (const n of next) {
     if (have.has(n.id) || before.has(n.id)) continue;
     out.push(placeClear(n, out));

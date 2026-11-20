@@ -121,3 +121,17 @@ test('a goal in one line redraws the board around it, with no key: the stand-in 
   assert.deepEqual(parts(typed.board), ['Open', 'Why seats fell', 'What you’d change', 'Who to talk to'], 'typed in their own words, the closest reading is used');
   assert.ok(typed.board.blocks.find(b => b.kind === 'questions')!.lines.some(l => /stopped using it/.test(l.text)));
 });
+
+test('the demo week reads right in any month: no number from the future, no deadline already past', () => {
+  for (const when of ['2027-02-10T13:00:00-05:00', '2027-07-01T09:00:00-04:00', '2026-12-31T16:00:00-05:00']) {
+    const at = new Date(when);
+    const m = demoMemory(at);
+    for (const x of m.metrics) for (const p of x.points) assert.ok(Date.parse(p.date) <= at.getTime(), `${x.label} on ${p.date} at ${when}`);
+    const w = demoWorld(at);
+    const text = [...w.seed, ...w.known].map(d => d.doc.text).join('\n');
+    for (const d of text.matchAll(/(?:renewal date is|decision by) (\w+ \d+)/g)) {
+      const due = new Date(`${d[1]}, ${at.getFullYear()}`), due2 = new Date(`${d[1]}, ${at.getFullYear() + 1}`);
+      assert.ok(due.getTime() > at.getTime() || due2.getTime() - at.getTime() < 60 * 864e5, `${d[0]} at ${when}`);
+    }
+  }
+});

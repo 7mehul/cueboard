@@ -100,3 +100,13 @@ test('Today: a call that just ended asks what happened; promises owed show, over
   ]);
   assert.ok(!t.sections.some(s => s.key === 'earlier'), 'the call has its notes now');
 });
+
+test('on the day the clocks change, tomorrow is still tomorrow, and a date that doesn’t exist isn’t read as one', () => {
+  const m: Memory = { ...emptyMemory('me'), people: [{ id: 'p1', name: 'Dana Ruiz', resolved: true }],
+    meetings: [{ id: 'mon', title: 'Monday call', startsAt: '2026-03-09T14:00:00.000Z', durationMin: 30, attendeeIds: ['p1'], sourceId: 's' }] };
+  const t = todayModel(m, '2026-03-08T13:00:00.000Z', []); // 9am on the spring-forward Sunday in New York
+  assert.deepEqual(t.sections.map(s => [s.key, s.meetings.map(x => x.title)]), [['tomorrow', ['Monday call']]]);
+  assert.equal(firstDate('See you Feb 29', '2026-11-20'), '2024-02-29', 'the last Feb 29 there was');
+  assert.equal(firstDate('Due 31 Nov', '2026-11-20'), null);
+  assert.equal(firstDate('2026-02-29 sync', '2026-11-20'), null);
+});

@@ -105,8 +105,8 @@ test('a calendar feed reads like the calendar: zones, guests, repeats, moved and
   assert.match(renewal.description!, /seat counts/);
   assert.deepEqual(renewal.attendees.map(a => [a.email, a.name ?? '', !!a.self, !!a.organizer]), [
     ['jordan@brightlinehealth.example', 'Jordan Ellis', false, false],
-    ['alex@cueboard.example', '', true, true],
-  ], 'rooms left out, an address used as a name ignored, the owner marked');
+    ['alex@cueboard.example', '', false, true],
+  ], 'rooms left out, an address used as a name ignored; who "you" are is the sync’s call, not the file’s');
 
   const weekly = cal.events.filter(e => e.title.startsWith('Fieldstone weekly'));
   assert.deepEqual(weekly.map(e => [e.start, e.title]), [
@@ -196,4 +196,80 @@ test('reading a link: redirects are checked again, dead links say so, only calen
 test('the address a connection actually uses is checked too, so a name can’t switch to a private one', async () => {
   const err = await new Promise<Error | null>(ok => safeLookup('localhost', {}, e => ok(e)));
   assert.ok(err instanceof LinkError && /private address/.test(err.message));
+});
+
+// ---------- what the memory audit found ----------
+import { cleanDescription } from '../src/memory/calendar.ts';
+import type { Memory } from '../src/memory/types.ts';
+
+const cal = (...events: string[]) => `BEGIN:VCALENDAR\nVERSION:2.0\n${events.join('\n')}\nEND:VCALENDAR`;
+const ev = (uid: string, start: string, end: string, more = '') => `BEGIN:VEVENT\nUID:${uid}\nDTSTART:${start}\nDTEND:${end}\nSUMMARY:${uid}\n${more}END:VEVENT`;
+const zoe = (): Memory => ({ ...emptyMemory('me'), user: { role: 'AE', company: 'Acme', email: 'zoe@acme.example' } });
+
+test('a weekly one-to-one doesn’t make the other person the calendar’s owner', () => {
+  const weekly = ev('omar-1on1', '20261103T150000Z', '20261103T153000Z', 'RRULE:FREQ=WEEKLY\nATTENDEE:mailto:omar@fieldstone.example\nATTENDEE:mailto:zoe@acme.example\n');
+  const c = parseIcs(cal(weekly), WINDOW);
+  assert.equal(c.email, undefined, 'a tie is no answer');
+  const s = syncCalendar(zoe(), c.events, { now: '2026-11-20T12:00:00Z', ...WINDOW, selfEmail: 'omar@fieldstone.example' });
+  assert.deepEqual(s.memory.people.map(p => p.email), ['omar@fieldstone.example'], 'the address the user gave wins over the calendar’s guess');
+});
+
+test('a meeting from an invite file stays when a calendar that doesn’t list it syncs', () => {
+  const invite = parseIcs(cal(ev('coffee-sam', '20261201T160000Z', '20261201T163000Z', 'ATTENDEE:mailto:sam@patel.example\nATTENDEE:mailto:zoe@acme.example\n')), WINDOW).events;
+  let m = syncCalendar(zoe(), invite, { now: '2026-11-20T12:00:00Z', from: '2026-11-20T12:00:00Z', to: '2026-11-20T12:00:00Z', via: 'invite' }).memory;
+  m = syncCalendar(m, [], { now: '2026-11-20T12:00:00Z', ...WINDOW }).memory;
+  assert.equal(m.meetings[0].cancelled, undefined);
+  // And when the calendar does list it, the calendar takes it over.
+  m = syncCalendar(m, invite, { now: '2026-11-20T12:00:00Z', ...WINDOW }).memory;
+  assert.equal(m.meetings[0].calendar?.via, undefined);
+});
+
+test('people added from a paste stay on the meeting, sync after sync', () => {
+  const m0: Memory = { ...zoe(), people: [{ id: 'p-maya', name: 'Maya Chen', email: 'maya@larkspur.example', resolved: true }, { id: 'p-ben', name: 'Ben Okoro', resolved: true }],
+    meetings: [{ id: 'mtg-paste', title: 'Partner meeting', startsAt: '2026-11-24T16:00:00.000Z', durationMin: 45, attendeeIds: ['p-maya', 'p-ben'], sourceId: 's-x' }] };
+  const e = parseIcs(cal(ev('partner', '20261124T160000Z', '20261124T164500Z', 'SUMMARY:Partner meeting\nATTENDEE:mailto:maya@larkspur.example\nATTENDEE:mailto:zoe@acme.example\n').replace('SUMMARY:partner\n', '')), WINDOW).events;
+  let m = syncCalendar(m0, e, { now: '2026-11-20T12:00:00Z', ...WINDOW }).memory;
+  m = syncCalendar(m, e, { now: '2026-11-20T12:00:00Z', ...WINDOW }).memory;
+  assert.deepEqual(m.meetings[0].attendeeIds.sort(), ['p-ben', 'p-maya']);
+});
+
+test('long event ids stay apart, and invites keep their real sentences', () => {
+  const long = 'AAMkAGI2TGuLAAA' + 'x'.repeat(90);
+  const e = parseIcs(cal(ev(long, '20261110T170000Z', '20261110T173000Z', 'RRULE:FREQ=WEEKLY;COUNT=3\nATTENDEE:mailto:priya.raman@northwind.example\nATTENDEE:mailto:zoe@acme.example\nDESCRIPTION:Agenda: pilot scope and the security review. Learn more about their rollout before we commit to a date.\n')), WINDOW).events;
+  const m = syncCalendar(zoe(), e, { now: '2026-11-20T12:00:00Z', ...WINDOW }).memory;
+  assert.equal(new Set(m.meetings.map(x => x.sourceId)).size, 3, 'each occurrence its own source');
+  assert.equal(new Set(m.docs.map(d => d.id)).size, 3);
+  assert.equal(cleanDescription('Agenda: pilot scope and timeline.\nJoin with Google Meet\nhttps://meet.google.com/abc-defg-hij\nAlex invited you to this event and wants to cover the renewal terms in detail before Friday.\nLearn more'),
+    'Agenda: pilot scope and timeline.\nAlex invited you to this event and wants to cover the renewal terms in detail before Friday.');
+});
+
+test('one broken event doesn’t lose the calendar, and each feed’s zones are its own', () => {
+  const good = ev('good', '20261125T170000Z', '20261125T173000Z');
+  const broken = ev('broken', 'not-a-date', '20261125T173000Z');
+  assert.deepEqual(parseIcs(cal(broken, good), WINDOW).events.map(e => e.id), ['good']);
+  // A feed that defines New York wrongly doesn't change how the next feed's New York is read.
+  const wrongNY = `BEGIN:VTIMEZONE\nTZID:America/New_York\nBEGIN:STANDARD\nDTSTART:19700101T000000\nTZOFFSETFROM:+0800\nTZOFFSETTO:+0800\nEND:STANDARD\nEND:VTIMEZONE`;
+  parseIcs(cal(wrongNY, 'BEGIN:VEVENT\nUID:a\nDTSTART;TZID=America/New_York:20261125T120000\nDTEND;TZID=America/New_York:20261125T130000\nEND:VEVENT'), WINDOW);
+  const b = parseIcs(cal('BEGIN:VEVENT\nUID:b\nDTSTART;TZID=America/New_York:20261125T120000\nDTEND;TZID=America/New_York:20261125T130000\nEND:VEVENT'), WINDOW);
+  assert.equal(b.events[0].start, '2026-11-25T17:00:00.000Z');
+});
+
+test('repeats: old series are quick, far-moved occurrences are found, floating times use the calendar’s zone', () => {
+  const daily = Array.from({ length: 50 }, (_, i) => ev(`daily-${i}`, '20000103T090000Z', '20000103T091500Z', 'RRULE:FREQ=DAILY\n')).join('\n');
+  const t0 = Date.now();
+  const c = parseIcs(cal(daily), WINDOW);
+  assert.ok(Date.now() - t0 < 1500, `took ${Date.now() - t0} ms`);
+  assert.equal(c.events.length, 50 * 28);
+  // The March occurrence of a monthly meeting, moved into this window.
+  const monthly = ev('monthly', '20260105T150000Z', '20260105T160000Z', 'RRULE:FREQ=MONTHLY\n') + '\n' +
+    'BEGIN:VEVENT\nUID:monthly\nRECURRENCE-ID:20270305T150000Z\nDTSTART:20261127T150000Z\nDTEND:20261127T160000Z\nSUMMARY:Pulled in\nEND:VEVENT';
+  assert.ok(parseIcs(cal(monthly), WINDOW).events.some(e => e.title === 'Pulled in' && e.start === '2026-11-27T15:00:00.000Z'));
+  const floating = cal('BEGIN:VEVENT\nUID:f\nDTSTART:20261125T090000\nDTEND:20261125T093000\nEND:VEVENT').replace('VERSION:2.0', 'VERSION:2.0\nX-WR-TIMEZONE:America/Los_Angeles');
+  assert.equal(parseIcs(floating, WINDOW).events[0].start, '2026-11-25T17:00:00.000Z');
+  assert.equal(parseIcs(floating.replace('X-WR-TIMEZONE:America/Los_Angeles\n', ''), WINDOW, { zone: 'Europe/London' }).events[0].start, '2026-11-25T09:00:00.000Z', 'or the reader’s zone');
+  // 2:30 on the spring-forward night doesn't exist; it moves forward to 3:30, as clocks do.
+  const gap = parseIcs(cal('BEGIN:VEVENT\nUID:g\nDTSTART;TZID=America/New_York:20270314T023000\nDTEND;TZID=America/New_York:20270314T033000\nEND:VEVENT'), { from: '2027-03-13T00:00:00Z', to: '2027-03-16T00:00:00Z' });
+  assert.equal(gap.events[0].start, '2027-03-14T07:30:00.000Z');
+  // The same UID twice, neither a repeat: two events.
+  assert.equal(parseIcs(cal(ev('dup', '20261125T170000Z', '20261125T173000Z'), ev('dup', '20261126T170000Z', '20261126T173000Z')), WINDOW).events.length, 2);
 });

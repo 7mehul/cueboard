@@ -91,8 +91,18 @@ export function researchPrompt(memory: Memory, plan: ResearchPlan, now: string):
   return out.join('\n');
 }
 
-// Pages are matched without their fragment or a trailing slash, the way a model might copy them.
-const page = (url: string) => { try { const u = new URL(url); u.hash = ''; return u.href.replace(/\/$/, '').toLowerCase(); } catch { return ''; } };
+// Pages are matched the way a model might copy them: http or https, with or without www, a
+// trailing slash, a fragment or tracking parameters. The path keeps its case (short links and
+// video ids are case-sensitive).
+const page = (url: string) => {
+  try {
+    const u = new URL(url.trim());
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return '';
+    u.protocol = 'https:'; u.hash = ''; u.hostname = u.hostname.toLowerCase().replace(/^www\./, '');
+    for (const k of [...u.searchParams.keys()]) if (/^(utm_\w+|fbclid|gclid|mc_eid|ref)$/i.test(k)) u.searchParams.delete(k);
+    return u.href.replace(/\/$/, '');
+  } catch { return ''; }
+};
 
 export interface Applied { memory: Memory; added: number; dropped: { text: string; why: string }[] }
 
@@ -101,7 +111,7 @@ export interface Applied { memory: Memory; added: number; dropped: { text: strin
 export function applyResearch(memory: Memory, plan: ResearchPlan, answer: Research, found: { url: string }[], now: string): Applied {
   const m: Memory = structuredClone(memory);
   const today = now.slice(0, 10), t = ms(now);
-  const pages = new Set(found.map(f => page(f.url)).filter(Boolean));
+  const pages = new Map(found.map(f => [page(f.url), f.url] as const).filter(([k]) => !!k));
   const subjects = new Map<string, Subject>([
     ...plan.people.map(p => [p.ref, { kind: 'person', id: p.id }] as const),
     ...plan.companies.map(c => [c.ref, { kind: 'company', id: c.id }] as const),
@@ -122,7 +132,7 @@ export function applyResearch(memory: Memory, plan: ResearchPlan, answer: Resear
     const k = key(subject);
     if ((count.get(k) ?? 0) >= PER_SUBJECT) { drop('enough about them already'); continue; }
     if (m.facts.some(x => key(x.subject) === k && normalize(x.text) === normalize(text))) { drop('already known'); continue; }
-    const url = f.url.trim();
+    const url = pages.get(page(f.url))!; // the address the search returned, not the model's copy of it
     const sourceId = `s-web-${hash(page(url))}`;
     if (!m.sources.some(s => s.id === sourceId)) m.sources.push({ id: sourceId, kind: 'web', ref: url, seenAt: today, url } as Source);
     m.facts.push({ id: `f-web-${hash(`${k}|${normalize(text)}`)}`, subject, topic: f.topic as FactTopic, text, sourceIds: [sourceId], date: published ?? today, confidence: 0.7 } as Fact);

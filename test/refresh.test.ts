@@ -86,3 +86,28 @@ test('when a new goal reorders the plan, untouched cards follow their part; a ca
   assert.equal(by.get('questions')!.x, 304, 'the questions follow the part they belong to');
   assert.equal(by.get('number-mrr')!.x, 900, 'where you put it');
 });
+
+test('two lines that say the same thing are two lines: deleting, ticking or editing one leaves the other', () => {
+  const list = (items: object[], at: Partial<El> = {}): El => ({ id: 'questions', type: 'list', x: 0, y: 0, w: 280, h: 100, title: 'Questions', items, ...at });
+  const q = (text: string, done = false) => ({ text, done });
+  const drafted = [list([q('Follow up'), q('Follow up')])];
+  // One of two identical questions deleted: it stays deleted.
+  assert.deepEqual((mergeRefresh([list([q('Follow up')])], drafted, [list([q('Follow up'), q('Follow up')])]).elements[0].items as object[]).length, 1);
+  // Both ticked: both stay ticked, and a new question joins them.
+  const ticked = mergeRefresh([list([q('Follow up', true), q('Follow up', true)])], drafted, [list([q('Follow up'), q('Follow up'), q('New')])]).elements[0].items as { text: string; done: boolean }[];
+  assert.deepEqual(ticked.map(i => `${i.done ? '✓' : '·'}${i.text}`), ['✓Follow up', '✓Follow up', '·New']);
+  // An edit that happens to match another line keeps both lines.
+  const d2 = [list([q('Ask about price'), q('Ask about SSO')])];
+  const edited = mergeRefresh([list([q('Ask about SSO'), q('Ask about SSO')])], d2, d2).elements[0].items as object[];
+  assert.equal(edited.length, 2);
+});
+
+test('a card following its part to a new column moves down if one of yours is already there', () => {
+  const part = (id: string, x: number): El => ({ id, type: 'card', x, y: 200, w: 280, h: 80, color: 'lilac', tag: '', title: id, lines: [] });
+  const drafted = [part('phase-a', 304)];
+  const mine: El = { id: 'e-mine', type: 'note', x: 608, y: 200, w: 280, h: 120 };
+  const r = mergeRefresh([...drafted, mine], drafted, [part('phase-a', 608)]).elements;
+  const a = r.find(e => e.id === 'phase-a')!;
+  assert.equal(a.x, 608);
+  assert.ok(a.y >= mine.y + mine.h, `moved clear, to y=${a.y}`);
+});

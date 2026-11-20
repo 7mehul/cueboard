@@ -288,6 +288,11 @@ async function accessToken(rt: string, fresh = false): Promise<string> {
   return t.accessToken;
 }
 
+// The zone the person reading is in, for calendar times that don't name one.
+const zoneOf = (req: IncomingMessage) => {
+  const z = new URL(req.url ?? '/', 'http://x').searchParams.get('tz') ?? '';
+  try { return z && z.length < 64 ? (new Intl.DateTimeFormat('en-US', { timeZone: z }), z) : undefined; } catch { return undefined; }
+};
 async function calendarApi(req: IncomingMessage, res: ServerResponse, path: string, who: string | null) {
   if (!allowed(req)) { notAllowed(res); return; }
   const grant = grantOf(req);
@@ -301,7 +306,7 @@ async function calendarApi(req: IncomingMessage, res: ServerResponse, path: stri
     if (typeof body?.url !== 'string') { send(res, 400, { error: { code: 'bad_link', message: 'Paste your calendar’s link.' } }); return; }
     try {
       const now = Date.now();
-      const cal = parseIcs(await fetchFeed(body.url), { from: new Date(now - 14 * 864e5).toISOString(), to: new Date(now + 14 * 864e5).toISOString() });
+      const cal = parseIcs(await fetchFeed(body.url), { from: new Date(now - 14 * 864e5).toISOString(), to: new Date(now + 14 * 864e5).toISOString() }, { zone: zoneOf(req) });
       console.log(`calendar link connected${tag(who)} · ${cal.events.length} events`);
       if (grant?.rt) { await revoke(grant.rt); access.delete(grant.rt); }
       const url = body.url.trim().replace(/^webcals?:\/\//i, 'https://');
@@ -320,9 +325,11 @@ async function calendarApi(req: IncomingMessage, res: ServerResponse, path: stri
   if (path === '/api/calendar/events' && req.method === 'GET' && grant?.ics) {
     const now = Date.now(), from = new Date(now - 14 * 864e5).toISOString(), to = new Date(now + 14 * 864e5).toISOString();
     try {
-      const cal = parseIcs(await fetchFeed(grant.ics), { from, to });
-      console.log(`calendar link${tag(who)} · ${cal.events.length} events`);
-      send(res, 200, { ...(cal.email ? { email: cal.email } : {}), from, to, events: cal.events });
+      const cal = parseIcs(await fetchFeed(grant.ics), { from, to }, { zone: zoneOf(req) });
+      console.log(`calendar link${tag(who)} · ${cal.events.length} events${cal.complete ? '' : ' (more than are read)'}`);
+      // Cut short, the list only speaks for the time it reaches; later meetings aren't "gone".
+      const until = cal.complete || !cal.events.length ? to : cal.events.at(-1)!.start;
+      send(res, 200, { ...(cal.email ? { email: cal.email } : {}), from, to: until, events: cal.events });
     } catch (e) {
       const gone = e instanceof LinkError && e.code === 'gone';
       console.log(`calendar link failed${tag(who)} · ${e instanceof LinkError ? e.code : 'parse'}`);
