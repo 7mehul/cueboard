@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { commit, inDocument, numbersIn, propose, readDoc, readPrompt } from '../src/memory/extract.ts';
+import { addMeeting, commit, inDocument, numbersIn, propose, readDoc, readPrompt } from '../src/memory/extract.ts';
 import type { Proposal } from '../src/memory/extract.ts';
 import { packetFor } from '../src/memory/packet.ts';
 import { emptyMemory } from '../src/memory/types.ts';
@@ -174,4 +174,12 @@ test('names in any script are recognised, and numbers keep their sign and their 
   assert.doesNotMatch(prompt, /Dana Ruiz/);
   assert.ok(numbersIn('Revenue grew 3x since spring').includes(3));
   assert.ok(numbersIn('churn moved −1.5% this month').includes(1.5));
+});
+
+test('two meetings with the same title on the same day are two meetings', () => {
+  let m: Memory = { ...emptyMemory('me'), people: [{ id: 'p1', name: 'Dana Ruiz', resolved: true }] };
+  const a = addMeeting(m, { title: 'Workshop', startsAt: '2026-11-24T14:00:00.000Z', durationMin: 60, attendeeIds: ['p1'] }); m = a.memory;
+  const b = addMeeting(m, { title: 'Workshop', startsAt: '2026-11-24T19:00:00.000Z', durationMin: 60, attendeeIds: ['p1'] }); m = b.memory;
+  assert.notEqual(a.meetingId, b.meetingId);
+  assert.equal(m.meetings.length, 2);
 });

@@ -2618,7 +2618,7 @@ async function readGranola(ids) {
   for (const [i, id] of ids.entries()) {
     line.textContent = `Fetching ${i + 1} of ${ids.length}`;
     try {
-      const r = await fetch('/api/granola/notes/' + id, grHeaders);
+      const r = await fetch('/api/granola/notes/' + encodeURIComponent(id), grHeaders);
       const note = await r.json().catch(() => null);
       if (!r.ok || !note) { failed.push((note && note.error && note.error.message) || id); continue; }
       // Your own Granola account says who "me" is, if About you didn't.

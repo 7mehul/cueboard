@@ -450,7 +450,10 @@ export function addMeeting(memory: Memory, form: MeetingForm, sourceId?: string)
     Object.assign(existing, { attendeeIds, durationMin: form.durationMin, ...(form.goal ? { goal: form.goal } : {}) });
     return { memory: m, meetingId: existing.id };
   }
-  const id = `mtg-${slug(form.title)}-${form.startsAt.slice(0, 10)}`;
+  // Two meetings with the same title on the same day (a morning and an afternoon session) stay two.
+  const base = `mtg-${slug(form.title)}-${form.startsAt.slice(0, 10)}`;
+  let id = base;
+  for (let n = 2; m.meetings.some(x => x.id === id); n++) id = `${base}-${n}`;
   let src = sourceId && m.sources.some(s => s.id === sourceId) ? sourceId : undefined;
   if (!src) {
     src = `s-${id}`;
