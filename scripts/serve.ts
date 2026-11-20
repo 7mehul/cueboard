@@ -57,7 +57,7 @@ const H = hosted ? (() => {
   const admins = new Set((process.env.CUE_ADMINS ?? '').split(/[,\s]+/).filter(n => names.has(n)));
   const num = (v: string | undefined, d: number) => (Number.isInteger(Number(v)) && Number(v) > 0 ? Number(v) : d);
   return {
-    invites, names, secret, admins, sample: /not-for-hosting/.test(secret),
+    invites, names, codes: new Map([...invites].map(([code, name]) => [name, code])), secret, admins, sample: /not-for-hosting/.test(secret),
     perTester: num(process.env.CUE_DAILY_CALLS, 150), total: num(process.env.CUE_DAILY_TOTAL, 1000),
     usage: new Usage(process.env.CUE_DATA_DIR || null), joins: new Limiter(10, 10 * 60_000),
   };
@@ -93,7 +93,8 @@ async function localKey(): Promise<string> {
 const seal = sealer(H ? H.secret : await localKey());
 
 const build = fileURLToPath(new URL('./build-app.ts', import.meta.url));
-if (hosted) { if (spawnSync(process.execPath, [build], { stdio: 'inherit' }).status !== 0) fail('the app didn’t build'); }
+// Hosted (and --no-watch, for tests) builds once; locally it rebuilds on every change.
+if (hosted || args.includes('--no-watch')) { if (spawnSync(process.execPath, [build], { stdio: 'inherit' }).status !== 0) fail('the app didn’t build'); }
 else spawn(process.execPath, [build, '--watch'], { stdio: 'inherit' });
 
 const send = (res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}) => {
@@ -102,9 +103,12 @@ const send = (res: ServerResponse, status: number, body: unknown, headers: Recor
 const page = (res: ServerResponse, status: number, html: string) => {
   res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }).end(html);
 };
+// A body that's too big, or that the client stops sending halfway, is no body.
 async function readBody(req: IncomingMessage, limit: number): Promise<string | null> {
   let size = 0; const chunks: Buffer[] = [];
-  for await (const c of req) { size += (c as Buffer).length; if (size > limit) return null; chunks.push(c as Buffer); }
+  try {
+    for await (const c of req) { size += (c as Buffer).length; if (size > limit) return null; chunks.push(c as Buffer); }
+  } catch { return null; }
   return Buffer.concat(chunks).toString('utf8');
 }
 const json = (raw: string | null): any => { try { return raw ? JSON.parse(raw) : null; } catch { return null; } };
@@ -112,8 +116,11 @@ const json = (raw: string | null): any => { try { return raw ? JSON.parse(raw) :
 // Only the page served here may call the API: the request has to carry the header a cross-site
 // form or image can't send, from this server's own origin, so other sites can't spend the key.
 const https = (req: IncomingMessage) => String(req.headers['x-forwarded-proto'] ?? '').split(',')[0].trim() === 'https';
+// Locally the server also checks it was addressed as this machine: a page on another site that
+// rebinds its own name to 127.0.0.1 would otherwise count as "same origin".
+const hostOk = (req: IncomingMessage) => hosted || origins.has(`http://${String(req.headers.host ?? '').toLowerCase()}`);
 function allowed(req: IncomingMessage) {
-  if (req.headers['x-cueboard'] !== '1') return false;
+  if (req.headers['x-cueboard'] !== '1' || !hostOk(req)) return false;
   const origin = req.headers.origin;
   if (!origin) return true;
   return hosted ? origin === `${https(req) ? 'https' : 'http'}://${req.headers.host}` : origins.has(origin);
@@ -122,30 +129,37 @@ const notAllowed = (res: ServerResponse) => send(res, 403, { error: { code: 'oth
 
 // The hosted allowance: model calls per tester per day, and for everyone together, counted when
 // a call starts, so a failing call still counts. It resets at midnight UTC.
+const running = new Map<string, number>();
+const MAX_AT_ONCE = 3;
 function overAllowance(res: ServerResponse, who: string | null): boolean {
   if (!H || !who) return false;
-  const mine = H.usage.today(who, 'model'), all = H.usage.todayAll();
-  if (mine < H.perTester && all < H.total) return false;
+  const busy = running.get(who) ?? 0;
+  const mine = H.usage.today(who, 'model') + busy, all = H.usage.todayAll() + [...running.values()].reduce((a, b) => a + b, 0);
+  if (busy >= MAX_AT_ONCE) { send(res, 429, { error: { code: 'rate_limited', message: 'A few things are already being read for you. Try again in a moment.' } }); return true; }
+  if (mine < H.perTester && all < H.total) { running.set(who, busy + 1); return false; }
   send(res, 429, { error: { code: 'rate_limited', message: mine >= H.perTester
     ? `That’s today’s ${H.perTester} model calls for you, the test’s daily limit. It resets at midnight UTC; boards still open and Float still works.`
     : 'The test has used today’s model calls for everyone. It resets at midnight UTC.' } });
   return true;
 }
 const logModel = (who: string | null, kind: string, t0: number, tokens: number | undefined, ok: boolean) => {
+  if (who) { const n = (running.get(who) ?? 1) - 1; if (n > 0) running.set(who, n); else running.delete(who); }
   if (H && who) H.usage.record({ t: new Date().toISOString(), who, ev: 'model', kind, ms: Date.now() - t0, ok, ...(tokens ? { tokens } : {}) });
 };
 const tag = (who: string | null) => (who ? ` · ${who}` : '');
 
+const EFFORTS = new Set(['low', 'medium', 'high']);
 async function api(req: IncomingMessage, res: ServerResponse, who: string | null) {
   if (!allowed(req)) { notAllowed(res); return; }
   if (req.method === 'GET') { send(res, 200, { available: !!llm, chat: !!llm?.text, ...(llm ? { model: llm.name } : {}), ...(hosted ? { hosted: true } : {}) }); return; }
   if (req.method !== 'POST') { send(res, 405, { error: { code: 'other', message: 'Use POST' } }); return; }
   if (!llm) { send(res, 503, { error: { code: 'unavailable', message: 'No model: start the server with ANTHROPIC_API_KEY set' } }); return; }
   const body = json(await readBody(req, 2_000_000)) as { step?: string; system?: string; prompt?: string; effort?: 'low' | 'medium' | 'high'; maxTokens?: number } | null;
-  const schema = body?.step ? SCHEMAS[body.step as keyof typeof SCHEMAS] : undefined;
+  const schema = typeof body?.step === 'string' && Object.hasOwn(SCHEMAS, body.step) ? SCHEMAS[body.step as keyof typeof SCHEMAS] : undefined;
   if (!body || !schema || typeof body.system !== 'string' || typeof body.prompt !== 'string') { send(res, 400, { error: { code: 'other', message: 'Unknown step or missing prompt' } }); return; }
   if (overAllowance(res, who)) return;
-  const maxTokens = typeof body.maxTokens === 'number' ? (hosted ? Math.min(body.maxTokens, 32_000) : body.maxTokens) : undefined;
+  const maxTokens = Number.isInteger(body.maxTokens) && body.maxTokens! > 0 ? Math.min(body.maxTokens!, hosted ? 32_000 : 128_000) : undefined;
+  if (body.effort !== undefined && !EFFORTS.has(body.effort)) { send(res, 400, { error: { code: 'other', message: 'Unknown effort' } }); return; }
   const t0 = Date.now();
   try {
     const q = { step: body.step!, system: body.system, prompt: body.prompt, schema: schema as never, ...(body.effort ? { effort: body.effort } : {}), ...(maxTokens ? { maxTokens } : {}) };
@@ -175,7 +189,7 @@ async function chatApi(req: IncomingMessage, res: ServerResponse, who: string | 
   if (overAllowance(res, who)) return;
   const t0 = Date.now();
   try {
-    const r = await llm.text({ messages: body!.messages!, effort: body!.effort ?? 'medium' });
+    const r = await llm.text({ messages: body!.messages!, effort: EFFORTS.has(body!.effort as string) ? body!.effort! : 'medium' });
     const tokens = r.usage ? r.usage.inputTokens + r.usage.outputTokens : undefined;
     console.log(`assistant${tag(who)} · ${((Date.now() - t0) / 1000).toFixed(1)}s${tokens ? ` · ${tokens.toLocaleString()} tokens` : ''}`);
     logModel(who, 'assistant', t0, tokens, true);
@@ -351,7 +365,8 @@ async function oauth(req: IncomingMessage, res: ServerResponse, path: string, qu
   if (path === '/oauth/google/callback') {
     const clear = `${OAUTH}=; ${cookieFlags(req, 0)}`;
     const state = query.get('state') ?? '', nonce = cookie(req.headers.cookie, OAUTH) ?? '', code = query.get('code');
-    const same = state.length > 0 && state.length === nonce.length && timingSafeEqual(Buffer.from(state), Buffer.from(nonce));
+    const a = Buffer.from(state), b = Buffer.from(nonce);
+    const same = a.length > 0 && a.length === b.length && timingSafeEqual(a, b);
     if (!same) { back(res, '/?calendar=failed', [clear]); return; }
     if (query.get('error') || !code) { back(res, '/?calendar=denied', [clear]); return; }
     try {
@@ -386,17 +401,18 @@ async function gate(req: IncomingMessage, res: ServerResponse, path: string): Pr
   if (path === '/join') { page(res, 200, joinPage()); return null; }
   if (path === '/api/join') {
     if (req.method !== 'POST' || !allowed(req)) { notAllowed(res); return null; }
-    const ip = String(req.headers['x-forwarded-for'] ?? '').split(',')[0].trim() || req.socket.remoteAddress || '?';
+    // The proxy in front adds the address it saw at the end; anything before it came from the client.
+    const ip = String(req.headers['x-forwarded-for'] ?? '').split(',').map(x => x.trim()).filter(Boolean).at(-1) || req.socket.remoteAddress || '?';
     if (!h.joins.allow(ip)) { send(res, 429, { error: { code: 'rate_limited', message: 'Too many tries. Wait ten minutes and try again.' } }); return null; }
     const code = json(await readBody(req, 2_000))?.code;
     const name = typeof code === 'string' ? h.invites.get(code.trim()) : undefined;
     if (!name) { send(res, 401, { error: { code: 'other', message: 'That code isn’t an invite. Check it and try again.' } }); return null; }
     const flags = `Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}${https(req) ? '; Secure' : ''}`;
     console.log(`joined · ${name}`);
-    send(res, 200, { ok: true }, { 'set-cookie': `${SESSION}=${sessionToken(name, h.secret)}; ${flags}` });
+    send(res, 200, { ok: true }, { 'set-cookie': `${SESSION}=${sessionToken(name, code.trim(), h.secret)}; ${flags}` });
     return null;
   }
-  const who = sessionName(cookie(req.headers.cookie, SESSION), h.secret, h.names);
+  const who = sessionName(cookie(req.headers.cookie, SESSION), h.secret, h.codes);
   if (!who) {
     if (path.startsWith('/api/')) send(res, 401, { error: { code: 'unavailable', message: 'Your invite has run out on this browser. Open your invite link again.' } });
     else res.writeHead(302, { location: '/join', 'cache-control': 'no-store' }).end();
@@ -417,8 +433,9 @@ async function gate(req: IncomingMessage, res: ServerResponse, path: string): Pr
   return who;
 }
 
-createServer(async (req, res) => {
-  const url = new URL(req.url ?? '/', 'http://localhost');
+async function route(req: IncomingMessage, res: ServerResponse) {
+  let url: URL;
+  try { url = new URL(req.url ?? '/', 'http://localhost'); } catch { res.writeHead(400).end(); return; }
   const path = url.pathname;
   let who: string | null = null;
   if (H) { who = await gate(req, res, path); if (!who) return; }
@@ -435,14 +452,25 @@ createServer(async (req, res) => {
     return;
   }
   if (path.startsWith('/oauth/google/')) { await oauth(req, res, path, url.searchParams); return; }
-  const file = path === '/' ? 'cueboard.html' : path.slice(1);
-  if (file.includes('..')) { res.writeHead(400).end(); return; }
+  // The app is one page. Nothing else on disk is served, whatever the path says.
+  if (path !== '/' && path !== '/cueboard.html') { res.writeHead(404).end('not found'); return; }
   try {
-    const body = await readFile(new URL(file, dist));
-    res.writeHead(200, { 'content-type': file.endsWith('.html') ? 'text/html; charset=utf-8' : 'application/octet-stream', 'cache-control': 'no-store' });
+    const body = await readFile(new URL('cueboard.html', dist));
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', ...(H ? {} : { 'content-security-policy': "frame-ancestors 'self'" }) });
     res.end(body);
   } catch {
     res.writeHead(404).end('not found');
+  }
+}
+
+// Anything that throws while answering is a 500 for that request, never the end of the server.
+process.on('unhandledRejection', e => console.error('unhandled', (e as Error)?.message ?? e));
+createServer(async (req, res) => {
+  try { await route(req, res); }
+  catch (e) {
+    console.error(`error · ${(e as Error)?.message ?? e}`);
+    if (!res.headersSent) res.writeHead(500, { 'content-type': 'text/plain' });
+    res.end();
   }
 }).listen(port, hosted ? '0.0.0.0' : '127.0.0.1', () => console.log(hosted
   ? `hosted test version on port ${port} · model: ${llm ? llm.name : 'none (set ANTHROPIC_API_KEY)'} · calendar: ${calendarOn ? 'on' : 'off (set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)'} · ${H!.names.size} invites · ${H!.perTester} model calls per tester a day, ${H!.total} in all · usage log: ${process.env.CUE_DATA_DIR ? process.env.CUE_DATA_DIR + '/usage.jsonl' : 'stdout only (set CUE_DATA_DIR to keep it)'}`

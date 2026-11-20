@@ -7,3 +7,6 @@ data
 deploy/local.env
 *.log
 .DS_Store
+.env
+.env.*
+!.env.example

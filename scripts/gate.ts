@@ -24,23 +24,26 @@ export function parseInvites(spec: string): Map<string, string> {
 
 export const newCode = () => randomBytes(12).toString('base64url');
 
-// The session: who, when it was issued, and a signature over both, so it can't be edited.
+// The session: who, when it was issued, and a signature over both and over the invite code it was
+// made with, so it can't be edited, and giving someone a new code signs out the old one.
 export const SESSION_DAYS = 60;
 const sign = (body: string, secret: string) => createHmac('sha256', secret).update(body).digest('base64url');
 
-export function sessionToken(name: string, secret: string, now = Date.now()): string {
+export function sessionToken(name: string, code: string, secret: string, now = Date.now()): string {
   const body = `${name}.${Math.floor(now / 1000)}`;
-  return `${body}.${sign(body, secret)}`;
+  return `${body}.${sign(`${body}.${code}`, secret)}`;
 }
 
-export function sessionName(token: string | null, secret: string, names: Set<string>, now = Date.now()): string | null {
+// `codes` is each invited name's current code.
+export function sessionName(token: string | null, secret: string, codes: Map<string, string>, now = Date.now()): string | null {
   const m = /^([a-z0-9][a-z0-9_-]{0,31})\.(\d{1,12})\.([A-Za-z0-9_-]{43})$/.exec(token ?? '');
-  if (!m) return null;
-  const want = Buffer.from(sign(`${m[1]}.${m[2]}`, secret)), got = Buffer.from(m[3]);
+  const code = m ? codes.get(m[1]) : undefined;
+  if (!m || !code) return null;
+  const want = Buffer.from(sign(`${m[1]}.${m[2]}.${code}`, secret)), got = Buffer.from(m[3]);
   if (want.length !== got.length || !timingSafeEqual(want, got)) return null;
   const age = now / 1000 - Number(m[2]);
   if (age < -300 || age > SESSION_DAYS * 86400) return null;
-  return names.has(m[1]) ? m[1] : null;
+  return m[1];
 }
 
 export function cookie(header: string | undefined, name: string): string | null {
@@ -62,7 +65,11 @@ export class Limiter {
     if (recent.length >= this.max) { this.hits.set(key, recent); return false; }
     recent.push(now);
     this.hits.set(key, recent);
-    if (this.hits.size > 5000) for (const [k, v] of this.hits) if (!v.some(t => now - t < this.windowMs)) this.hits.delete(k);
+    // Kept small: stale keys go first, then the oldest, so a flood of addresses can't grow it.
+    if (this.hits.size > 5000) {
+      for (const [k, v] of this.hits) if (!v.some(t => now - t < this.windowMs)) this.hits.delete(k);
+      for (const k of this.hits.keys()) { if (this.hits.size <= 4000) break; this.hits.delete(k); }
+    }
     return true;
   }
 }

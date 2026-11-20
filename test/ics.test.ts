@@ -161,7 +161,7 @@ END:VCALENDAR`;
 });
 
 // ---------- reading a calendar link on the server ----------
-import { LinkError, feedUrl, fetchFeed, privateAddress } from '../scripts/calendar-link.ts';
+import { LinkError, feedUrl, fetchFeed, privateAddress, safeLookup } from '../scripts/calendar-link.ts';
 
 const PUBLIC_IP = 'https://93.184.215.14/calendar/ical/basic.ics'; // an address literal, so no DNS lookup
 const reply = (status: number, body = '', headers: Record<string, string> = {}) => new Response(status >= 300 && status < 400 ? null : body, { status, headers });
@@ -173,6 +173,11 @@ test('a calendar link must be a public https address', () => {
     assert.throws(() => feedUrl(bad), LinkError, bad);
   }
   assert.ok(privateAddress('192.168.1.10') && privateAddress('::ffff:10.1.2.3') && privateAddress('100.64.0.1'));
+  // An IPv4 address written as IPv6, the way URLs rewrite it: still private.
+  for (const bad of ['https://[::ffff:127.0.0.1]/c.ics', 'https://[::ffff:a9fe:a9fe]/latest/meta-data', 'https://[::ffff:7f00:1]:8080/admin', 'https://[0:0:0:0:0:ffff:a00:1]/x']) {
+    assert.throws(() => feedUrl(bad), LinkError, bad);
+  }
+  assert.ok(privateAddress('::ffff:7f00:1') && privateAddress('fe80::1') && privateAddress('not-an-ip'));
   assert.ok(!privateAddress('93.184.215.14') && !privateAddress('2606:4700::1111'));
 });
 
@@ -186,4 +191,9 @@ test('reading a link: redirects are checked again, dead links say so, only calen
   await assert.rejects(fetchFeed(PUBLIC_IP, { fetcher: toMetadata }), /private address/);
   await assert.rejects(fetchFeed(PUBLIC_IP, { fetcher: (async () => reply(404)) as typeof fetch }), (e: LinkError) => e.code === 'gone');
   await assert.rejects(fetchFeed(PUBLIC_IP, { fetcher: (async () => reply(200, '<html>Sign in</html>')) as typeof fetch }), /isn’t a calendar/);
+});
+
+test('the address a connection actually uses is checked too, so a name can’t switch to a private one', async () => {
+  const err = await new Promise<Error | null>(ok => safeLookup('localhost', {}, e => ok(e)));
+  assert.ok(err instanceof LinkError && /private address/.test(err.message));
 });

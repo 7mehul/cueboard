@@ -20,15 +20,16 @@ test('invites are name:code pairs, checked before the server starts', () => {
   assert.match(newCode(), /^[A-Za-z0-9_-]{16}$/);
 });
 
-test('a session names its tester until it’s edited, too old, or their invite is taken out', () => {
+test('a session names its tester until it’s edited, too old, their invite is taken out, or their code changes', () => {
   const now = Date.parse('2026-10-28T12:00:00Z');
-  const names = new Set(['maya', 'ben']);
-  const t = sessionToken('maya', SECRET, now);
+  const names = new Map([['maya', 'maya-code-123'], ['ben', 'ben-code-456']]);
+  const t = sessionToken('maya', 'maya-code-123', SECRET, now);
   assert.equal(sessionName(t, SECRET, names, now), 'maya');
   assert.equal(sessionName(t.replace('maya', 'ben_'), SECRET, names, now), null, 'renamed');
   assert.equal(sessionName(t.slice(0, -1) + (t.endsWith('A') ? 'B' : 'A'), SECRET, names, now), null, 'signature edited');
   assert.equal(sessionName(t, 'y'.repeat(40), names, now), null, 'another secret');
-  assert.equal(sessionName(t, SECRET, new Set(['ben']), now), null, 'invite removed');
+  assert.equal(sessionName(t, SECRET, new Map([['ben', 'ben-code-456']]), now), null, 'invite removed');
+  assert.equal(sessionName(t, SECRET, new Map([['maya', 'maya-NEW-code'], ['ben', 'ben-code-456']]), now), null, 'a new code signs the old one out');
   assert.equal(sessionName(t, SECRET, names, now + 61 * 864e5), null, 'past 60 days');
   assert.equal(sessionName(null, SECRET, names, now), null);
   assert.equal(sessionName('garbage', SECRET, names, now), null);
