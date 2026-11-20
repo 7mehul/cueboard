@@ -52,6 +52,7 @@ li+li{margin-top:6px}
 <li>Your boards and memory are saved in this browser only. Use the same browser each time; clearing its site data erases them.</li>
 <li>Text you paste is sent to Anthropic’s Claude to be read. Cueboard’s server passes it on and doesn’t keep it.</li>
 <li>The test counts what you do (boards made, the floating window opened) but never what’s in them.</li>
+<li>Cueboard is open source under the AGPL-3.0: <a href="https://github.com/7mehul/cueboard" target="_blank" rel="noopener noreferrer">read the code</a>.</li>
 </ul>
 </div></main>
 <script>

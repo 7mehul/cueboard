@@ -1,7 +1,21 @@
 {
-  "name": "cueboard-engine",
+  "name": "cueboard",
+  "version": "0.1.0",
+  "description": "Meeting prep boards: say what a meeting is for, get a visual plan of how it should run and what you need in it.",
+  "license": "AGPL-3.0-only",
   "private": true,
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/7mehul/cueboard.git"
+  },
+  "homepage": "https://github.com/7mehul/cueboard#readme",
+  "bugs": {
+    "url": "https://github.com/7mehul/cueboard/issues"
+  },
+  "engines": {
+    "node": ">=26"
+  },
   "scripts": {
     "test": "node --test \"test/**/*.test.ts\"",
     "typecheck": "tsc --noEmit",

@@ -6,3 +6,6 @@ reports/
 .DS_Store
 # Usage log when the hosted version runs locally with CUE_DATA_DIR=data
 data/
+
+# Local settings with real values: copy .env.example
+.env
