@@ -29,7 +29,7 @@ export interface CalendarSync { memory: Memory; added: string[]; changed: string
 // Addresses anyone can sign up for say nothing about which company someone is from.
 const PUBLIC = new Set(['gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.com', 'msn.com', 'yahoo.com', 'icloud.com', 'me.com', 'mac.com', 'aol.com', 'proton.me', 'protonmail.com', 'pm.me', 'gmx.com', 'gmx.de', 'fastmail.com', 'hey.com', 'zoho.com', 'yandex.com', 'mail.com', 'qq.com', '163.com']);
 const domainOf = (email: string) => email.toLowerCase().split('@')[1] ?? '';
-const companyDomain = (email: string) => { const d = domainOf(email); return d && !PUBLIC.has(d) ? d : null; };
+export const companyDomain = (email: string) => { const d = domainOf(email); return d && !PUBLIC.has(d) ? d : null; };
 // Rooms and equipment are guests too, in Google's eyes.
 const isResource = (email: string) => /@resource\.calendar\.google\.com$|@group\.calendar\.google\.com$/i.test(email);
 
@@ -185,7 +185,7 @@ export function meetingInputs(memory: Memory, meetingId: string, now = Date.now(
   return hash(parts.sort().join('\n'));
 }
 
-function hash(s: string): string {
+export function hash(s: string): string {
   let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
   for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); h1 = Math.imul(h1 ^ c, 2654435761); h2 = Math.imul(h2 ^ c, 1597334677); }
   h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);

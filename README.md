@@ -42,11 +42,13 @@ The key or sign-in stays in the server; the page never sees it. Every setting is
 
 | Source | Status | What you need |
 | --- | --- | --- |
-| Paste: invites, email threads, notes, transcripts | Works | Nothing. Paste several at once; each piece is sorted and dated |
-| Google Calendar | Works, read-only | Your own Google Cloud OAuth client ([setup](#calendar-boards-without-asking)) |
+| Your calendar, by its private link | Works, read-only | The link from Google, Outlook or Apple Calendar ([where to find it](#calendar-boards-without-asking)) |
+| Google Calendar, by signing in | Works, read-only | Your own Google Cloud OAuth client ([setup](#calendar-boards-without-asking)) |
+| Invite files (.ics) | Works | Drop or paste one on Today |
+| Research on the people you meet | Works | Claude (it uses Claude's web search). On by default; switch it off on Today |
+| Paste: invites, email threads, notes, transcripts | Works | Nothing. Paste several at once, or drop text files; each piece is sorted and dated |
 | Granola notes | Works | A Granola Business plan API key |
 | Your profile and goals | Works | Fill in "About you" once |
-| Web research on people and companies | Planned | |
 | Other notetakers (Fireflies, Fathom), Gmail, CRMs | Planned | |
 
 ## How it's built
@@ -249,7 +251,7 @@ node scripts/eval-extract.ts --verbose     # a real model reads the six sample d
 ## Run it
 
 ```bash
-npm test                                   # 122 tests: behaviour, the plan, the checker catching each broken rule, the judgment layer, memory, Today, Granola, calendar, refresh, the demo week, the hosted gate
+npm test                                   # 133 tests: behaviour, the plan, calendar links and invites, research, the checker catching each broken rule, the judgment layer, memory, Today, Granola, calendar, refresh, the demo week, the hosted gate
 node scripts/show.ts followup              # print a board as text (first | followup | seed:<n>)
 node scripts/scale.ts --n 1000000          # generate, build and check a million boards
 node scripts/scale.ts --n 200000 --edge 0.5   # same, with planted problems in half the packets
@@ -283,10 +285,41 @@ promise, Floating a board. The demo documents to paste are under the paste box. 
 `scenarios/demo.ts`, with the reading a good model would give for each document;
 `test/demo.test.ts` checks that every one reads cleanly and every board passes the checker.
 
+## Research: who you're meeting
+
+Before a board is drafted, Cueboard looks up the people coming from outside your company, and
+their company, on the web (`src/memory/research.ts`): their role and background, what the company
+does, news from the last four months. Claude searches with its web search tool; then code keeps a
+finding only if:
+
+- its page is one the search actually returned (each line on the board links to that page);
+- it's about someone in the meeting, whose identity the calendar or a paste confirmed, and has a
+  full name (a first name alone finds strangers);
+- its topic fits (a person's role, a company's news), news has a date within four months, and
+  memory doesn't already know it.
+
+Nothing about anyone's private life is asked for. Each person and company is looked up once a month
+at most; a failed search is tried again the next day. Their names and companies go to Claude's web
+search, which is why it can be switched off on Today. It needs a model that can search: the local
+server's Claude, not the stand-in. `--demo --fake-model` scripts a search for the Northwind call,
+with one claim whose page the search never returned, so the check that drops it can be seen.
+
 ## Calendar: boards without asking
 
-Connect Google Calendar on Today and Cueboard reads it (read-only) when it opens, every ten
-minutes while it's open, and when you come back to the tab. Then:
+Connect your calendar on Today and Cueboard reads it (read-only) when it opens, every ten minutes
+while it's open, and when you come back to the tab. There are two ways in:
+
+- **Its private link**, from any calendar app. Google Calendar: Settings, your calendar, Integrate
+  calendar, "Secret address in iCal format". Outlook: Settings, Calendar, Shared calendars, Publish
+  a calendar with "Can view all details". Apple Calendar: share it as a Public Calendar. No setup
+  on the server. The link is sealed into a cookie and never logged; the server only fetches public
+  https addresses (`scripts/calendar-link.ts`), and repeating meetings, moved occurrences and time
+  zones come from the file itself (`src/memory/ics.ts`, using Mozilla's ical.js). Tested with
+  Google's format; Outlook's and Apple's links should work the same way but haven't been tried yet.
+- **Signing in with Google**, which needs a Google Cloud client (below).
+
+An invite file (.ics) dropped or pasted on Today adds its meeting the same way, without connecting
+anything. Then:
 
 - **Meetings come in by themselves.** Every event with someone from outside your company becomes a
   meeting in memory; internal meetings, focus time, declined invites and all-day events don't.
@@ -305,10 +338,11 @@ minutes while it's open, and when you come back to the tab. Then:
   under you; it offers the update.
 - **Past meetings count.** A meeting the calendar says happened, with no notes in memory, makes the
   next board a follow-up that says so ("No notes from it yet"), and Today asks for those notes.
-- The Google grant is sealed into a cookie only this server can read, so the server keeps no one's
-  calendar access. Disconnecting revokes it; meetings already read stay in memory.
+- The Google grant or the link is sealed into a cookie only this server can read, so the server
+  keeps no one's calendar access. Disconnecting removes it (and revokes a Google grant); meetings
+  already read stay in memory.
 
-Setting it up (once, in Google Cloud):
+Setting up Google sign-in (once, in Google Cloud):
 
 1. Create a project, and enable the **Google Calendar API**.
 2. Google Auth Platform: app name Cueboard, audience **External**, data access
@@ -390,6 +424,9 @@ and Render restarts with it.
 | `src/memory/calendar.ts` | Calendar events into memory; a board's fingerprint; which boards to draft or refresh |
 | `src/refresh.ts` | Bringing a drafted board up to date while keeping everything the user did |
 | `scripts/google.ts` | Google sign-in, the sealed grant, reading events |
+| `scripts/calendar-link.ts` | Reading a calendar's private link safely: public https addresses only, size and redirect limits |
+| `src/memory/ics.ts` | A calendar feed or invite file into events, repeats expanded within the window |
+| `src/memory/research.ts` | Who to look up before a meeting, the search prompt, and the checks on what comes back |
 | `src/intel/providers/server.ts` | The page's model through the local server (`scripts/serve.ts`) |
 | `src/export.ts` | Converts an engine board into canvas items, keeping memory and gap markers |
 | `app/board.js`, `app/board.css`, `app/index.html` | The freeform canvas (from the prototype, extended) |

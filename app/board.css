@@ -710,3 +710,9 @@ body.rotating,body.rotating *{cursor:grabbing!important}
 .td-link:hover{color:var(--ink)}
 .menu-src{display:block;padding:8px 12px 4px;font-size:12px;color:var(--faint);text-decoration:none}
 .menu-src:hover{color:var(--ink);text-decoration:underline;text-underline-offset:3px}
+.td-cal-link{display:flex;gap:8px}
+.td-cal-link .in{flex:1;height:40px}
+.td-cal-link .btn.primary{flex:none}
+.td-cal > .btn:not(.primary){align-self:flex-start;height:36px;background:var(--hover)}
+.td-check{display:flex;align-items:center;gap:10px;font-size:15px;font-weight:500;cursor:pointer}
+.td-check input{width:18px;height:18px;accent-color:var(--accent);margin:0}

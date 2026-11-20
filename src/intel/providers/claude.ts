@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod';
-import type { JsonRequest, LLM, TextRequest, Usage } from '../llm.ts';
+import type { Found, JsonRequest, LLM, TextRequest, Usage } from '../llm.ts';
 import { LLMError, schemaInstructions, validate } from '../llm.ts';
 
 // Claude through the official SDK, for Node (scripts, a server, the eval). Credentials come from
@@ -60,6 +60,37 @@ export function claude(opts: { model?: string; client?: Anthropic } = {}): LLM {
     }
   }
 
+  // Research: Claude searches the web, then answers in plain JSON. Every page the searches return is
+  // kept, so code can check that each finding cites one of them. A long search can pause; the
+  // turn is sent back as it stands and the server carries on.
+  async function search<T>(req: JsonRequest<T>, withFallbacks: boolean): Promise<{ value: T; found: Found[]; usage: Usage }> {
+    const messages: Anthropic.Beta.BetaMessageParam[] = [{ role: 'user', content: `${req.prompt}\n\n${schemaInstructions(req.schema)}` }];
+    const found = new Map<string, Found>();
+    const usage: Usage = { inputTokens: 0, outputTokens: 0 };
+    for (let turn = 0; turn < 4; turn++) {
+      const base = {
+        model, max_tokens: req.maxTokens ?? 16000, system: system(req), messages,
+        tools: [{ type: 'web_search_20260209' as const, name: 'web_search' as const, max_uses: 8 }],
+        output_config: { effort: req.effort ?? 'medium' },
+      };
+      const res = withFallbacks
+        ? await client.beta.messages.create({ ...base, betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' })
+        : await client.beta.messages.create(base);
+      const u = usageOf(res.usage);
+      usage.inputTokens += u.inputTokens; usage.outputTokens += u.outputTokens;
+      for (const b of res.content) {
+        // A failed search comes back as an error object instead of a list of results.
+        if (b.type !== 'web_search_tool_result' || !Array.isArray(b.content)) continue;
+        for (const r of b.content) found.set(r.url, { url: r.url, ...(r.title ? { title: r.title } : {}), ...(r.page_age ? { pageAge: r.page_age } : {}) });
+      }
+      if (res.stop_reason === 'pause_turn') { messages.push({ role: 'assistant', content: res.content }); continue; }
+      stopped(res.stop_reason, res.stop_details?.category);
+      const text = res.content.map(b => (b.type === 'text' ? b.text : '')).join('');
+      return { value: validate(req.schema, parseJson(text)), found: [...found.values()], usage };
+    }
+    throw new LLMError('invalid', 'The search didn’t finish');
+  }
+
   async function chat(req: TextRequest, withFallbacks: boolean) {
     const base = {
       model, max_tokens: req.maxTokens ?? 16000,
@@ -79,6 +110,17 @@ export function claude(opts: { model?: string; client?: Anthropic } = {}): LLM {
     async json<T>(req: JsonRequest<T>) {
       try {
         return await attempt(loose.has(req.step) ? plain : strict, req);
+      } catch (e) {
+        throw e instanceof LLMError ? e : toLLMError(e);
+      }
+    },
+    async research<T>(req: JsonRequest<T>) {
+      try {
+        try { return await search(req, fallbacks); }
+        catch (e) {
+          if (!(fallbacks && e instanceof Anthropic.BadRequestError)) throw e;
+          const r = await search(req, false); fallbacks = false; return r;
+        }
       } catch (e) {
         throw e instanceof LLMError ? e : toLLMError(e);
       }

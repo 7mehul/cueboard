@@ -25,10 +25,15 @@ export interface TextRequest {
   maxTokens?: number;
 }
 
+// A page a web search turned up. The model's answer may only cite these.
+export interface Found { url: string; title?: string; pageAge?: string }
+
 export interface LLM {
   name: string;
   json<T>(req: JsonRequest<T>): Promise<{ value: T; usage?: Usage }>;
   text?(req: TextRequest): Promise<{ text: string; usage?: Usage }>;
+  // A JSON answer written after searching the web, with every page the searches returned.
+  research?<T>(req: JsonRequest<T>): Promise<{ value: T; found: Found[]; usage?: Usage }>;
 }
 
 export type LLMErrorCode = 'refusal' | 'invalid' | 'unavailable' | 'rate_limited' | 'other';

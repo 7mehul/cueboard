@@ -15,12 +15,16 @@ Useful to include: what you found, how to reproduce it, and what someone could d
 - The local server (`scripts/serve.ts`): it should only answer the page it serves, and keys
   (Anthropic, Google, Granola) should never reach the browser.
 - The hosted mode (`--hosted`): invite codes, session cookies, rate limits, the sealed Google grant.
+- Calendar links: the server fetches the link a user gives it, so it must never reach a private or
+  internal address (`scripts/calendar-link.ts`).
 - Anything that lets one person's memory, boards or documents reach another person or a model
   call they didn't make.
 
 ## How data is handled
 
 - Boards and memory live in the browser (or a Claude artifact's own storage), not on the server.
-- Keys stay in the server's environment. Text you paste is sent to Anthropic to be read.
+- Keys stay in the server's environment. Text you paste is sent to Anthropic to be read. With
+  research on, the names and companies of the people you meet go to Claude's web search.
+- A calendar's private link is sealed into a cookie and never logged.
 - `deploy/local.env` holds public sample values for trying the hosted mode on your own machine;
   the server refuses them anywhere else.

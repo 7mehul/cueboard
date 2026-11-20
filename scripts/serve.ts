@@ -19,10 +19,12 @@ import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { SCHEMAS } from '../src/intel/schemas.ts';
 import { LLMError } from '../src/intel/llm.ts';
-import type { LLM } from '../src/intel/llm.ts';
+import type { Found, LLM, Usage as Tokens } from '../src/intel/llm.ts';
 import { Limiter, Usage, clientEvent, cookie, parseInvites, sessionName, sessionToken, SESSION_DAYS } from './gate.ts';
 import { adminPage, joinPage } from './hosted-pages.ts';
 import { GoogleError, authUrl, exchangeCode, listEvents, refreshAccess, revoke, sealer } from './google.ts';
+import { LinkError, fetchFeed } from './calendar-link.ts';
+import { parseIcs } from '../src/memory/ics.ts';
 
 const args = process.argv.slice(2);
 const hosted = args.includes('--hosted');
@@ -146,11 +148,14 @@ async function api(req: IncomingMessage, res: ServerResponse, who: string | null
   const maxTokens = typeof body.maxTokens === 'number' ? (hosted ? Math.min(body.maxTokens, 32_000) : body.maxTokens) : undefined;
   const t0 = Date.now();
   try {
-    const r = await llm.json({ step: body.step!, system: body.system, prompt: body.prompt, schema: schema as never, ...(body.effort ? { effort: body.effort } : {}), ...(maxTokens ? { maxTokens } : {}) });
+    const q = { step: body.step!, system: body.system, prompt: body.prompt, schema: schema as never, ...(body.effort ? { effort: body.effort } : {}), ...(maxTokens ? { maxTokens } : {}) };
+    // Research searches the web; it's the one step that needs a model that can.
+    if (body.step === 'research' && !llm.research) throw new LLMError('unavailable', 'This model can’t search the web');
+    const r: { value: unknown; usage?: Tokens; found?: Found[] } = body.step === 'research' ? await llm.research!(q) : await llm.json(q);
     const tokens = r.usage ? r.usage.inputTokens + r.usage.outputTokens : undefined;
-    console.log(`${body.step}${tag(who)} · ${((Date.now() - t0) / 1000).toFixed(1)}s${tokens ? ` · ${tokens.toLocaleString()} tokens` : ''}`);
+    console.log(`${body.step}${tag(who)} · ${((Date.now() - t0) / 1000).toFixed(1)}s${tokens ? ` · ${tokens.toLocaleString()} tokens` : ''}${r.found ? ` · ${r.found.length} pages` : ''}`);
     logModel(who, body.step!, t0, tokens, true);
-    send(res, 200, { value: r.value, ...(r.usage ? { usage: r.usage } : {}) });
+    send(res, 200, { value: r.value, ...(r.found ? { found: r.found } : {}), ...(r.usage ? { usage: r.usage } : {}) });
   } catch (e) {
     const err = e instanceof LLMError ? { code: e.code, message: e.message } : { code: 'other', message: (e as Error).message };
     console.log(`${body.step}${tag(who)} failed · ${err.code}: ${err.message}`);
@@ -251,7 +256,8 @@ async function granolaApi(req: IncomingMessage, res: ServerResponse, path: strin
 }
 
 // Google Calendar. The page asks for events; the server reads them with the grant in the cookie.
-type Grant = { rt?: string; fake?: boolean; at: number };
+// Either a Google grant, or a calendar's private feed link (any calendar app), sealed the same way.
+type Grant = { rt?: string; fake?: boolean; ics?: string; at: number };
 const GCAL = 'cue_gcal', OAUTH = 'cue_oauth';
 const access = new Map<string, { token: string; exp: number }>();
 const cookieFlags = (req: IncomingMessage, maxAge: number) => `Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${https(req) ? '; Secure' : ''}`;
@@ -271,12 +277,45 @@ async function accessToken(rt: string, fresh = false): Promise<string> {
 async function calendarApi(req: IncomingMessage, res: ServerResponse, path: string, who: string | null) {
   if (!allowed(req)) { notAllowed(res); return; }
   const grant = grantOf(req);
+  const via = grant?.ics ? 'link' : grant?.fake && fakeCalendar ? 'sample' : grant?.rt && calendarOn ? 'google' : null;
   if (path === '/api/calendar' && req.method === 'GET') {
-    send(res, 200, { configured: calendarOn, connected: !!(grant && (grant.rt || grant.fake)), ...(fakeCalendar ? { fake: true } : {}), ...(hosted ? { hosted: true } : {}) }); return;
+    send(res, 200, { configured: calendarOn, link: true, connected: !!via, ...(via ? { via } : {}), ...(fakeCalendar ? { fake: true } : {}), ...(hosted ? { hosted: true } : {}) }); return;
+  }
+  // Connecting by link: read it once to be sure it's a calendar, then keep it sealed in the cookie.
+  if (path === '/api/calendar/link' && req.method === 'POST') {
+    const body = json(await readBody(req, 8_000)) as { url?: unknown } | null;
+    if (typeof body?.url !== 'string') { send(res, 400, { error: { code: 'bad_link', message: 'Paste your calendar’s link.' } }); return; }
+    try {
+      const now = Date.now();
+      const cal = parseIcs(await fetchFeed(body.url), { from: new Date(now - 14 * 864e5).toISOString(), to: new Date(now + 14 * 864e5).toISOString() });
+      console.log(`calendar link connected${tag(who)} · ${cal.events.length} events`);
+      if (grant?.rt) { await revoke(grant.rt); access.delete(grant.rt); }
+      const url = body.url.trim().replace(/^webcals?:\/\//i, 'https://');
+      send(res, 200, { ok: true, ...(cal.email ? { email: cal.email } : {}), events: cal.events.length }, { 'set-cookie': `${GCAL}=${seal.seal({ ics: url, at: now })}; ${cookieFlags(req, 365 * 86400)}` });
+    } catch (e) {
+      const err = e instanceof LinkError ? { code: e.code, message: e.message } : { code: 'bad_link', message: (e as Error).message || 'Couldn’t read that calendar.' };
+      console.log(`calendar link failed${tag(who)} · ${err.code}`);
+      send(res, 400, { error: err });
+    }
+    return;
   }
   if (path === '/api/calendar/disconnect' && req.method === 'POST') {
     if (grant?.rt) { await revoke(grant.rt); access.delete(grant.rt); }
     send(res, 200, { ok: true }, { 'set-cookie': `${GCAL}=; ${cookieFlags(req, 0)}` }); return;
+  }
+  if (path === '/api/calendar/events' && req.method === 'GET' && grant?.ics) {
+    const now = Date.now(), from = new Date(now - 14 * 864e5).toISOString(), to = new Date(now + 14 * 864e5).toISOString();
+    try {
+      const cal = parseIcs(await fetchFeed(grant.ics), { from, to });
+      console.log(`calendar link${tag(who)} · ${cal.events.length} events`);
+      send(res, 200, { ...(cal.email ? { email: cal.email } : {}), from, to, events: cal.events });
+    } catch (e) {
+      const gone = e instanceof LinkError && e.code === 'gone';
+      console.log(`calendar link failed${tag(who)} · ${e instanceof LinkError ? e.code : 'parse'}`);
+      if (gone) send(res, 401, { error: { code: 'reconnect', message: (e as Error).message } }, { 'set-cookie': `${GCAL}=; ${cookieFlags(req, 0)}` });
+      else send(res, 502, { error: { code: 'unavailable', message: (e as Error).message || 'Couldn’t read your calendar.' } });
+    }
+    return;
   }
   if (path === '/api/calendar/events' && req.method === 'GET') {
     if (!calendarOn) { send(res, 503, { error: { code: 'unavailable', message: 'Google Calendar isn’t set up on this server.' } }); return; }

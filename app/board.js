@@ -2323,6 +2323,14 @@ async function boardFromMemory(meetingId, added, opts) {
   const open = opts.open !== false;
   await (Mem.ready || (Mem.ready = loadMemory()));
   const llm = await memoryModel();
+  // Before the board: look up who's coming, if they haven't been lately.
+  if (llm && llm.research && researchOn() && Engine.researchMeeting && Engine.researchPlan && Engine.researchPlan(Mem.data, meetingId, new Date().toISOString())) {
+    if (open) toast('Looking up who you’re meeting…');
+    try {
+      const rr = await Engine.researchMeeting(Mem.data, meetingId, new Date().toISOString(), llm);
+      if (rr) { Mem.data = rr.memory; await saveMemory(); if (rr.added) track('researched', { n: rr.added }); }
+    } catch (_) { }
+  }
   if (llm && open) toast('Reading the meeting…');
   const inputs = Engine.meetingInputs ? Engine.meetingInputs(Mem.data, meetingId, Date.now()) : '';
   let r = null;
@@ -2575,7 +2583,7 @@ async function readGranola(ids) {
 // while it's open, and when you come back to the tab. Every meeting today and tomorrow then gets
 // its board drafted without anyone asking, and a board whose meeting or memory changed is brought
 // up to date. The server holds no one's calendar: the grant lives in this browser's cookie.
-const CAL = { status: null, busy: false, last: 0, error: null, email: null };
+const CAL = { status: null, busy: false, last: 0, error: null, email: null, draft: '' };
 async function calendarStatus() {
   try { const r = await fetch('/api/calendar', grHeaders); CAL.status = r.ok ? await r.json() : null; } catch (_) { CAL.status = null; }
   queueToday();
@@ -2630,28 +2638,93 @@ async function calendarBoot() {
 const ago = t => { const m = Math.round((Date.now() - t) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : `${Math.round(m / 60)} h ago`; };
 function calendarCard() {
   const st = CAL.status;
-  if (!st || (!st.configured && st.hosted)) return null;
-  const pitch = 'Connect Google Calendar and every meeting with someone from outside your company gets its board drafted before you ask. Cueboard only reads it.';
-  if (!st.configured) {
-    return h('div', { class: 'td-owed td-cal' }, h('h2', { text: 'Your meetings, by themselves' }), h('p', { class: 'td-muted', text: pitch }),
-      h('details', { class: 'td-setup' }, h('summary', { text: 'Set it up on this machine' }),
-        h('ol', { class: 'gr-setup' },
-          h('li', {}, 'In Google Cloud, create an OAuth client (type: Web application) with this redirect address:', h('code', { text: `${location.origin}/oauth/google/callback` })),
-          h('li', {}, 'Turn on the Google Calendar API, and add your Google account as a test user.'),
-          h('li', {}, 'Start Cueboard again with the client’s ID and secret set:', h('code', { text: 'GOOGLE_CLIENT_ID=… GOOGLE_CLIENT_SECRET=… node scripts/serve.ts' })))));
-  }
+  if (!st) return null;
+  const pitch = 'Connect your calendar and every meeting with someone from outside your company gets its board drafted before you ask. Cueboard only reads it.';
   if (!st.connected) {
+    // Any calendar app can share a private link; signing in with Google is the other way in, where
+    // this server has a Google client set up.
+    const link = h('input', { class: 'in', type: 'url', 'data-keep': 'cal-link', value: CAL.draft, placeholder: 'Paste your calendar’s private link', 'aria-label': 'Your calendar’s private link', autocomplete: 'off', spellcheck: 'false' });
+    link.addEventListener('input', () => { CAL.draft = link.value; });
+    const form = h('form', { class: 'td-cal-link', onsubmit: ev => { ev.preventDefault(); connectLink(link.value); } },
+      link, h('button', { class: 'btn primary', type: 'submit', disabled: CAL.busy }, CAL.busy ? 'Reading…' : 'Connect'));
+    const where = h('details', { class: 'td-setup' }, h('summary', { text: 'Where to find the link' }),
+      h('ol', { class: 'gr-setup' },
+        h('li', {}, h('b', { text: 'Google Calendar: ' }), 'Settings, then your calendar under “Settings for my calendars”, then Integrate calendar: copy “Secret address in iCal format”.'),
+        h('li', {}, h('b', { text: 'Outlook: ' }), 'Settings, Calendar, Shared calendars, then Publish a calendar with “Can view all details”: copy the ICS link.'),
+        h('li', {}, h('b', { text: 'Apple Calendar: ' }), 'share the calendar as a Public Calendar and copy its link.')),
+      h('p', { class: 'td-muted', text: 'Anyone with the link can read your calendar, so Cueboard keeps it sealed in this browser and never logs it. You can reset it in your calendar’s settings at any time.' }));
+    const google = st.configured ? h('button', { class: 'btn', type: 'button', onclick: () => location.assign('/oauth/google/start') }, ic('calendar'), 'Or sign in with Google') : null;
+    const setup = !st.configured && !st.hosted ? h('details', { class: 'td-setup' }, h('summary', { text: 'Or sign in with Google (set up on this machine)' }),
+      h('ol', { class: 'gr-setup' },
+        h('li', {}, 'In Google Cloud, create an OAuth client (type: Web application) with this redirect address:', h('code', { text: `${location.origin}/oauth/google/callback` })),
+        h('li', {}, 'Turn on the Google Calendar API, and add your Google account as a test user.'),
+        h('li', {}, 'Start Cueboard again with the client’s ID and secret set:', h('code', { text: 'GOOGLE_CLIENT_ID=… GOOGLE_CLIENT_SECRET=… node scripts/serve.ts' })))) : null;
     return h('div', { class: 'td-owed td-cal' }, h('h2', { text: 'Your meetings, by themselves' }),
-      h('p', { class: 'td-muted', text: CAL.error || pitch }),
-      h('button', { class: 'btn primary', type: 'button', onclick: () => location.assign('/oauth/google/start') }, ic('calendar'), CAL.error ? 'Connect again' : 'Connect Google Calendar'));
+      h('p', { class: 'td-muted' + (CAL.error ? ' td-bad' : ''), text: CAL.error || pitch }), form, where, google, setup);
   }
   const line = CAL.busy ? 'Reading your calendar…' : CAL.error ? CAL.error : CAL.last ? `Synced ${ago(CAL.last)}` : 'Connected';
-  return h('div', { class: 'td-owed td-cal' }, h('h2', { text: 'Google Calendar' }),
+  return h('div', { class: 'td-owed td-cal' }, h('h2', { text: st.via === 'link' ? 'Your calendar' : st.via === 'sample' ? 'Sample calendar' : 'Google Calendar' }),
     h('p', { class: 'td-muted' }, CAL.email ? h('span', { class: 'td-cal-who', text: CAL.email }) : null, line),
     h('div', { class: 'td-cal-act' },
       h('button', { class: 'btn', type: 'button', disabled: CAL.busy, onclick: () => syncCalendar(true) }, 'Sync now'),
       h('button', { class: 'btn', type: 'button', onclick: disconnectCalendar }, 'Disconnect')));
 }
+// Looking people up on the web is on unless switched off here; it's this browser's choice.
+const researchOn = () => { try { return localStorage.getItem('cueboard.research') !== 'off'; } catch (_) { return true; } };
+function researchCard() {
+  if (!Engine || !Engine.researchMeeting || !(GR.status && GR.status.server)) return null;
+  const on = researchOn();
+  const box = h('input', { type: 'checkbox', id: 'td-research', checked: on });
+  box.addEventListener('change', () => { try { localStorage.setItem('cueboard.research', box.checked ? 'on' : 'off'); } catch (_) { } renderToday(); if (box.checked) queuePrep(); });
+  return h('div', { class: 'td-owed td-research' }, h('h2', { text: 'Who you’re meeting' }),
+    h('label', { class: 'td-check', for: 'td-research' }, box, h('span', { text: 'Look them up on the web before each meeting' })),
+    h('p', { class: 'td-muted', text: on
+      ? 'Their role, background and company news, once a month per person. Only what a page says, with the page linked. Their names and companies are sent to Claude’s web search.'
+      : 'Off. Boards use only what you’ve pasted, imported or have in your calendar.' }));
+}
+async function connectLink(url) {
+  if (!url.trim() || CAL.busy) return;
+  CAL.busy = true; CAL.error = null; queueToday();
+  try {
+    const r = await fetch('/api/calendar/link', { method: 'POST', headers: { 'content-type': 'application/json', 'x-cueboard': '1' }, body: JSON.stringify({ url }) });
+    const b = await r.json().catch(() => null);
+    if (!r.ok || !b || !b.ok) { CAL.error = (b && b.error && b.error.message) || 'Couldn’t read that calendar.'; return; }
+    CAL.draft = ''; CAL.status = Object.assign({}, CAL.status, { connected: true, via: 'link' });
+    if (b.email) CAL.email = b.email;
+    track('calendar_connected', { kind: 'link' });
+    toast('Calendar connected. Drafting boards for today and tomorrow…');
+  } catch (_) { CAL.error = 'Couldn’t reach Cueboard’s server.'; }
+  finally { CAL.busy = false; queueToday(); }
+  if (CAL.status && CAL.status.connected) await syncCalendar(true);
+}
+
+// An invite file, dropped or pasted: its meetings go into memory the way the calendar's do. An
+// invite only adds; it never takes other meetings away.
+async function importInvites(text) {
+  await (Mem.ready || (Mem.ready = loadMemory()));
+  if (!Mem.data) return;
+  const self = (Mem.data.user && Mem.data.user.email) || CAL.email;
+  if (!self) {
+    // Without knowing which guest is you, you'd end up as a guest at your own meeting.
+    R = { mode: 'prep', afterYou: () => { closeSheet(); importInvites(text); } };
+    sheet.hidden = false; sheetYou();
+    toast('Add your email first, so Cueboard can tell you from the guests.');
+    return;
+  }
+  let cal;
+  const now = Date.now(), at = new Date(now).toISOString();
+  try { cal = Engine.parseIcs(text, { from: new Date(now - 864e5).toISOString(), to: new Date(now + 366 * 864e5).toISOString() }); }
+  catch (e) { toast((e && e.message) || 'That isn’t a calendar file.'); return; }
+  if (!cal.events.length) { toast('There’s no meeting ahead in that invite.'); return; }
+  const s = Engine.syncCalendar(Mem.data, cal.events, { now: at, from: at, to: at, selfEmail: self });
+  const fresh = [...s.added, ...s.changed];
+  if (!fresh.length) { toast('Nothing new: it’s already in your meetings, or it’s only with people from your company.'); return; }
+  Mem.data = s.memory; await saveMemory();
+  const titles = fresh.map(id => (Mem.data.meetings.find(m => m.id === id) || {}).title).filter(Boolean);
+  toast(`Added ${titles.slice(0, 2).join(' and ')}${titles.length > 2 ? ` and ${titles.length - 2} more` : ''}. Drafting the board…`);
+  for (const id of s.added) makeFromToday(id);
+}
+const isInvite = t => /BEGIN:VCALENDAR/i.test(t) && /BEGIN:VEVENT/i.test(t);
 
 // Drafting without being asked: one board at a time, soonest meeting first. A board that's on
 // screen isn't changed under the person looking at it; it offers the update instead.
@@ -2802,9 +2875,10 @@ function openFromToday(id, float) {
 function renderToday() {
   if (!TD.open) return;
   // A goal being typed keeps its place through a redraw.
-  const typing = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.goal : null;
+  const ds = document.activeElement && document.activeElement.dataset;
+  const typing = ds && (ds.goal ? `[data-goal="${ds.goal}"]` : ds.keep ? `[data-keep="${ds.keep}"]` : null);
   const caret = typing ? document.activeElement.selectionStart : 0;
-  if (typing) setTimeout(() => { const i = todayEl.querySelector(`[data-goal="${typing}"]`); if (i && document.activeElement !== i) { i.focus(); try { i.setSelectionRange(caret, caret); } catch (_) { } } }, 0);
+  if (typing) setTimeout(() => { const i = todayEl.querySelector(typing); if (i && document.activeElement !== i) { i.focus(); try { i.setSelectionRange(caret, caret); } catch (_) { } } }, 0);
   const now = new Date();
   const model = Mem.data ? Engine.todayModel(Mem.data, now.toISOString(), madeFor()) : { sections: [], owed: [], upcoming: 0 };
   const todays = (model.sections.find(x => x.key === 'today') || { meetings: [] }).meetings.length;
@@ -2840,9 +2914,25 @@ function renderToday() {
   ta.addEventListener('input', () => { TD.draft = ta.value; clearTimeout(tt); tt = setTimeout(drawChips, 200); });
   pasteApart(ta, () => { TD.draft = ta.value; drawChips(); });
   drawChips();
+  // Files dropped here: invites become meetings, text files (a notetaker's export) join the paste.
+  ta.addEventListener('dragover', e => { if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) e.preventDefault(); });
+  ta.addEventListener('drop', async e => {
+    const files = [...((e.dataTransfer && e.dataTransfer.files) || [])];
+    if (!files.length) return;
+    e.preventDefault(); e.stopPropagation();
+    for (const f of files.slice(0, 10)) {
+      if (f.size > 2e6) { toast(`${f.name} is too big to read here`); continue; }
+      const t = await f.text().catch(() => '');
+      if (isInvite(t)) { importInvites(t); continue; }
+      if (!/^text\/|\.(txt|md|vtt|srt|eml)$/i.test(f.type || f.name) || !t.trim()) { toast(`${f.name}: drop invites (.ics) or text files`); continue; }
+      TD.draft = (TD.draft.trim() ? TD.draft.replace(/\s+$/, '') + Engine.PASTE_BREAK : '') + t.trim();
+    }
+    renderToday();
+  });
   const readBtn = h('button', { class: 'btn primary td-read', type: 'button', onclick: () => {
     if (!TD.draft.trim()) { ta.focus(); return; }
     const text = TD.draft; TD.draft = '';
+    if (isInvite(text)) { renderToday(); importInvites(text); return; }
     openSheet('prep', { text, go: true });
   } }, ic('spark'), 'Read them');
   const samples = DEMO.on && DEMO.samples.length ? h('div', { class: 'demo-samples' }, h('span', { class: 'td-muted', text: 'Demo documents:' }),
@@ -2861,7 +2951,7 @@ function renderToday() {
   const gr = granolaOffered() ? h('div', { class: 'td-owed' }, h('h2', { text: 'Notes you already have' }),
     h('p', { class: 'td-muted', text: 'Bring in past meetings from Granola, so follow-ups know where you left off.' }),
     h('button', { class: 'btn td-gr', type: 'button', onclick: openGranolaImport }, ic('note'), 'Import from Granola')) : null;
-  todayEl.replaceChildren(top, h('div', { class: 'td-main' }, list, h('aside', { class: 'td-side' }, demoGuide(), calendarCard(), paste, gr, owed)));
+  todayEl.replaceChildren(top, h('div', { class: 'td-main' }, list, h('aside', { class: 'td-side' }, demoGuide(), calendarCard(), researchCard(), paste, gr, owed)));
 }
 
 function meetingCard(m, key, now) {

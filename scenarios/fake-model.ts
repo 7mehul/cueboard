@@ -3,7 +3,7 @@ import { LLMError } from '../src/intel/llm.ts';
 import { scripted } from '../src/intel/providers/scripted.ts';
 import { toAnswer } from '../src/intel/schemas.ts';
 import { STORY, bindKnown } from './docs.ts';
-import { demoAnswer, demoBrief, demoRanking } from './demo.ts';
+import { demoAnswer, demoBrief, demoRanking, demoResearch } from './demo.ts';
 
 // A stand-in model for trying the app without credentials (node scripts/serve.ts --fake-model).
 // It only knows the story documents in scenarios/docs.ts and the demo week's (scenarios/demo.ts):
@@ -28,6 +28,7 @@ export function fakeModel(): LLM {
     // The demo week's meetings are read as a good model would; any other meeting is left to the rules.
     understand: req => demoBrief(req.prompt) ?? (() => { throw new LLMError('unavailable', 'The fake model leaves this meeting to the rules'); })(),
     rank: req => demoRanking(req.prompt) ?? (() => { throw new LLMError('unavailable', 'The fake model leaves this meeting to the rules'); })(),
+    research: req => demoResearch(req.prompt) ?? (() => { throw new LLMError('unavailable', 'The fake model can’t search the web'); })(),
   }, 'fake');
   // The board assistant gets a polite stand-in reply, so the panel can be tried end to end.
   return {

@@ -520,3 +520,26 @@ export function demoRanking(prompt: string) {
   const gaps = [...prompt.matchAll(/^\[(gap:[\w-]+)\]/gm)].map(x => x[1]);
   return { items: gaps.map(id => ({ id, score: 1, why: 'worth asking' })), questions: r.questions.map(text => ({ text, why: 'serves the goal' })) };
 }
+
+// What a search would turn up before the first Northwind call: a few pages about Priya and her
+// company, and one claim from a page the search never returned, which the checks throw out.
+export function demoResearch(prompt: string, now = new Date()) {
+  if (!prompt.includes(`${DEMO_USER.role} at ${DEMO_USER.company}`)) return null;
+  const ref = (re: RegExp) => re.exec(prompt)?.[1];
+  const p = ref(/^- \[(p\d+)\] Priya Raman/m), c = ref(/^- \[(c\d+)\] Northwind/m);
+  const day = (n: number) => ymd(at(now, n));
+  const findings = [
+    ...(p ? [
+      { about: p, topic: 'background', text: 'Ran dispatch at a regional 3PL for six years', url: 'https://northwind.example/team/priya-raman', published: '' },
+      { about: p, topic: 'interest', text: 'Writes about giving reps back admin time', url: 'https://northwind.example/blog/rep-time', published: day(-25) },
+    ] : []),
+    ...(c ? [
+      { about: c, topic: 'company', text: 'Midwest freight carrier with 14 depots', url: 'https://northwind.example/about', published: '' },
+      { about: c, topic: 'news', text: 'Opened a Reno hub, its first in the West', url: 'https://freightnews.example/northwind-reno', published: day(-9) },
+      { about: c, topic: 'news', text: 'Said to be raising a Series B', url: 'https://rumours.example/northwind', published: day(-3) },
+    ] : []),
+  ];
+  const found = ['https://northwind.example/team/priya-raman', 'https://northwind.example/blog/rep-time', 'https://northwind.example/about/', 'https://freightnews.example/northwind-reno']
+    .filter(() => p || c).map(url => ({ url }));
+  return { value: { findings }, found };
+}

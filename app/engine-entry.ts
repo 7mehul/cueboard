@@ -16,6 +16,8 @@ import { PASTE_BREAK, splitPaste } from '../src/memory/split.ts';
 import { todayModel } from '../src/memory/today.ts';
 import { granolaToDoc } from '../src/memory/granola.ts';
 import { meetingInputs, prepPlan, syncCalendar } from '../src/memory/calendar.ts';
+import { parseIcs } from '../src/memory/ics.ts';
+import { researchMeeting, researchPlan } from '../src/memory/research.ts';
 import { mergeRefresh } from '../src/refresh.ts';
 import { emptyMemory } from '../src/memory/types.ts';
 import type { Doc, Memory } from '../src/memory/types.ts';
@@ -66,7 +68,7 @@ export async function boardForSmart(sampleId: string, sample: unknown) {
 // Which model the page can use: Claude inside a published artifact, or the local server's.
 export function modelFor(sample: unknown): LLM { return artifactModel(sample as Parameters<typeof artifactModel>[0]); }
 export function localModel(): LLM { return serverModel('/api/llm', 'local'); }
-export { serverStatus, upcoming, splitPaste, PASTE_BREAK, todayModel, granolaToDoc, syncCalendar, meetingInputs, prepPlan, mergeRefresh };
+export { serverStatus, upcoming, splitPaste, PASTE_BREAK, todayModel, granolaToDoc, syncCalendar, meetingInputs, prepPlan, mergeRefresh, parseIcs, researchMeeting, researchPlan };
 
 // Memory as saved by the page: whatever is missing is filled in, so an older save still loads.
 export function reviveMemory(raw: unknown, userId: string): Memory {
@@ -78,7 +80,7 @@ export function reviveMemory(raw: unknown, userId: string): Memory {
     userId: typeof r.userId === 'string' ? r.userId : userId, ...(r.user && typeof r.user === 'object' ? { user: r.user } : {}),
     people: arr('people'), companies: arr('companies'), sources: arr('sources'), facts: arr('facts'), metrics: arr('metrics'),
     disclosures: arr('disclosures'), touches: arr('touches'), commitments: arr('commitments'), objections: arr('objections'),
-    meetings: arr('meetings'), docs: arr('docs'),
+    meetings: arr('meetings'), docs: arr('docs'), ...(Array.isArray(r.research) ? { research: r.research } : {}),
   };
 }
 

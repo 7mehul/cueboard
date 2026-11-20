@@ -17,5 +17,13 @@ export function scripted(script: Script, name = 'scripted'): LLM & { calls: { st
       if (!answer) throw new LLMError('unavailable', `No scripted answer for ${req.step}`);
       return { value: validate(req.schema, answer(req as JsonRequest<unknown>)) };
     },
+    // A scripted research answer is { value, found }: the reading and the pages "searched".
+    ...(script.research ? {
+      async research<T>(req: JsonRequest<T>) {
+        calls.push({ step: req.step, prompt: req.prompt });
+        const r = script.research(req as JsonRequest<unknown>) as { value: unknown; found: { url: string }[] };
+        return { value: validate(req.schema, r.value), found: r.found };
+      },
+    } : {}),
   };
 }

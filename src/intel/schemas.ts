@@ -233,5 +233,20 @@ export function toAnswer(x: Extraction): ExtractionAnswer {
   };
 }
 
+// ---------- research: what the web says about the people coming and their company ----------
+
+export const RESEARCH_TOPICS = { person: ['role', 'background', 'interest', 'decision'], company: ['company', 'news', 'tools', 'fund', 'portfolio'] } as const;
+
+export const Research = z.object({
+  findings: z.array(z.object({
+    about: z.string().describe('A ref from PEOPLE or COMPANIES, such as "p1" or "c1"'),
+    topic: z.enum([...RESEARCH_TOPICS.person, ...RESEARCH_TOPICS.company]).describe(`For a person: ${RESEARCH_TOPICS.person.join(', ')}. For a company: ${RESEARCH_TOPICS.company.join(', ')}`),
+    text: z.string().describe(`The finding as a line on a board, ${BOARD_LINE}`),
+    url: z.string().describe('The page it comes from, exactly as it appeared in your search results'),
+    published: z.string().describe('YYYY-MM-DD if the page shows when it was published, else ""'),
+  })).describe('What you found. Fewer is fine; none is fine'),
+});
+export type Research = z.infer<typeof Research>;
+
 // Which schema answers which step, so a server can run any step a page asks for by name.
-export const SCHEMAS = { understand: MeetingBrief, rank: Ranking, extract: ExtractionAnswer } as const;
+export const SCHEMAS = { understand: MeetingBrief, rank: Ranking, extract: ExtractionAnswer, research: Research } as const;

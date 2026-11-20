@@ -27,6 +27,10 @@ export interface MeetingRecord {
 // The document itself, kept so the model can read it again when preparing for these people.
 export interface MemoryDoc { id: string; kind: DocKind; title: string; text: string; date: string; sourceId: string; personIds: string[] }
 
+// Who has been looked up on the web, and when, so each person or company is researched once a
+// month at most. A failed lookup is tried again the next day.
+export interface ResearchRecord { subject: string; at: string; found: number; failed?: boolean }
+
 export interface Memory {
   userId: string;
   user?: UserProfile;
@@ -41,6 +45,7 @@ export interface Memory {
   objections: Objection[];
   meetings: MeetingRecord[];
   docs: MemoryDoc[];
+  research?: ResearchRecord[];
 }
 
 export function emptyMemory(userId: string, user?: UserProfile): Memory {
