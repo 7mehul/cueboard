@@ -144,16 +144,34 @@ export function applyResearch(memory: Memory, plan: ResearchPlan, answer: Resear
   return { memory: m, added, dropped };
 }
 
-// The whole step for one meeting. Null when there's nobody new to look up or no model that
-// can search; a failed search is logged so it's tried again tomorrow, not on every refresh.
-export async function researchMeeting(memory: Memory, meetingId: string, now: string, llm: LLM | null): Promise<Applied | null> {
+// A search takes a while, and memory can change meanwhile (a paste, a calendar sync). So it's two
+// steps: search (researchFind), then save what was found into memory as it is by then
+// (researchSave). Null when there's nobody new to look up or no model that can search.
+export interface Found { plan: ResearchPlan; answer?: Research; found?: { url: string }[] }
+
+export async function researchFind(memory: Memory, meetingId: string, now: string, llm: LLM | null): Promise<Found | null> {
   const plan = researchPlan(memory, meetingId, now);
   if (!plan || !llm?.research) return null;
   try {
     const r = await llm.research({ step: 'research', system: RESEARCH_SYSTEM, prompt: researchPrompt(memory, plan, now), schema: Research, effort: 'medium', maxTokens: 16000 });
-    return applyResearch(memory, plan, r.value, r.found, now);
-  } catch {
-    const failed = [...plan.people.map(p => `person:${p.id}`), ...plan.companies.map(c => `company:${c.id}`)].map(subject => ({ subject, at: now, found: 0, failed: true }));
-    return { memory: { ...memory, research: [...(memory.research ?? []), ...failed].slice(-500) }, added: 0, dropped: [] };
-  }
+    return { plan, answer: r.value, found: r.found };
+  } catch { return { plan }; }
+}
+
+// A failed search is logged too, so it's tried again tomorrow, not on every refresh. Anyone who
+// left memory while the search ran is left out.
+export function researchSave(memory: Memory, f: Found, now: string): Applied {
+  const plan: ResearchPlan = {
+    ...f.plan,
+    people: f.plan.people.filter(p => memory.people.some(x => x.id === p.id)),
+    companies: f.plan.companies.filter(c => memory.companies.some(x => x.id === c.id)),
+  };
+  if (f.answer && f.found) return applyResearch(memory, plan, f.answer, f.found, now);
+  const failed = [...plan.people.map(p => `person:${p.id}`), ...plan.companies.map(c => `company:${c.id}`)].map(subject => ({ subject, at: now, found: 0, failed: true }));
+  return { memory: { ...memory, research: [...(memory.research ?? []), ...failed].slice(-500) }, added: 0, dropped: [] };
+}
+
+export async function researchMeeting(memory: Memory, meetingId: string, now: string, llm: LLM | null): Promise<Applied | null> {
+  const f = await researchFind(memory, meetingId, now, llm);
+  return f ? researchSave(memory, f, now) : null;
 }

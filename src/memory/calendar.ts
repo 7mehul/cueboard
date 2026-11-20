@@ -233,7 +233,7 @@ export function prepPlan(memory: Memory, boards: BoardState[], now: string): { m
   const d = new Date(t); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() + 2);
   const horizon = d.getTime();
   const make: string[] = [], refresh: string[] = [];
-  const ahead = memory.meetings.filter(x => !x.cancelled && x.attendeeIds.length && ms(x.startsAt) > t && ms(x.startsAt) < horizon)
+  const ahead = memory.meetings.filter(x => !x.cancelled && !x.boardDismissed && x.attendeeIds.length && ms(x.startsAt) > t && ms(x.startsAt) < horizon)
     .sort((a, b) => ms(a.startsAt) - ms(b.startsAt));
   for (const x of ahead) {
     const mine = boards.filter(b => b.meetingId === x.id);

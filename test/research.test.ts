@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { demoMemory, demoResearch, demoWorld } from '../scenarios/demo.ts';
 import { syncCalendar } from '../src/memory/calendar.ts';
-import { applyResearch, researchMeeting, researchPlan, researchPrompt } from '../src/memory/research.ts';
+import { applyResearch, researchFind, researchMeeting, researchPlan, researchPrompt, researchSave } from '../src/memory/research.ts';
 import { packetFor } from '../src/memory/packet.ts';
 import { buildBoard } from '../src/engine.ts';
 import { checkBoard } from '../src/check.ts';
@@ -104,4 +104,15 @@ test('a page matches however the model copied it, but a path is case-sensitive; 
   assert.deepEqual(r.dropped.map(d => d.why), ['its page wasn’t in the search results']);
   const src = r.memory.sources.find(s => s.id === r.memory.facts.find(x => x.text.startsWith('Midwest'))!.sourceIds[0])!;
   assert.equal(src.url, 'https://northwind.example/about');
+});
+
+test('what a slow search finds is saved into memory as it is when the search ends, not as it was', async () => {
+  const m = synced();
+  const id = meeting(m, /Northwind/).id;
+  const found = (await researchFind(m, id, now, llm()))!;
+  // Meanwhile, an invite was imported.
+  const later: Memory = { ...m, meetings: [...m.meetings, { id: 'mtg-new', title: 'Coffee with Sam', startsAt: '2026-11-02T16:00:00.000Z', durationMin: 30, attendeeIds: [], sourceId: 's-new' }] };
+  const saved = researchSave(later, found, now).memory;
+  assert.ok(saved.meetings.some(x => x.id === 'mtg-new'), 'the import is kept');
+  assert.ok(saved.facts.some(f => /Reno hub/.test(f.text)), 'and so is the research');
 });

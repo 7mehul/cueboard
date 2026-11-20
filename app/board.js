@@ -312,7 +312,7 @@ function normalizeBoard(raw) {
     elements,
     links: (Array.isArray(raw.links) ? raw.links : []).slice(0, 400).map(l => normalizeLink(l, ids)).filter(Boolean),
     view: v && isFinite(num(v.x)) && isFinite(num(v.y)) && isFinite(num(v.z)) ? { x: num(v.x), y: num(v.y), z: clamp(num(v.z), 0.15, 3) } : null,
-    ...(typeof raw.meetingId === 'string' && /^[\w-]{1,80}$/.test(raw.meetingId) ? { meetingId: raw.meetingId } : {}),
+    ...(typeof raw.meetingId === 'string' && /^[\p{L}\p{N}_-]{1,80}$/u.test(raw.meetingId) ? { meetingId: raw.meetingId } : {}),
     ...(raw.settle === true ? { settle: true } : {}),
     ...(raw.reflow === true ? { reflow: true } : {}),
     ...(raw.gen && typeof raw.gen === 'object' && Array.isArray(raw.gen.els) ? { gen: normGen(raw.gen) } : {}),
@@ -1114,7 +1114,8 @@ function positionSelTools() {
 }
 
 /* ================= undo ================= */
-const snapshot = () => JSON.stringify({ e: els(), l: links() });
+// A refresh changes what the board remembers as drafted too, so undoing one brings that back as well.
+const snapshot = () => JSON.stringify({ e: els(), l: links(), ...(board().gen ? { g: board().gen, t: board().title } : {}) });
 function pushUndo() {
   S.undo.push(snapshot()); if (S.undo.length > 100) S.undo.shift();
   S.redo.length = 0; S.touched = true; updateUndo();
@@ -1125,6 +1126,7 @@ function restore(json) {
   board().elements = (raw.e || []).map(x => normalizeEl(x, true)).filter(Boolean);
   const ids = new Set(els().map(e => e.id));
   board().links = (raw.l || []).map(l => normalizeLink(l, ids)).filter(Boolean);
+  if (raw.g && Array.isArray(raw.g.els)) { board().gen = normGen(raw.g); if (typeof raw.t === 'string') { board().title = raw.t; updateChrome(); } }
   pruneGroups();
   S.multi = new Set([...S.multi].filter(id => ids.has(id)));
   S.sel = S.multi.has(S.sel) ? S.sel : null; S.selLink = null; S.editEl = null; closePop();
@@ -1610,7 +1612,15 @@ function readLocal() {
   try { const raw = localStorage.getItem(LS_KEY); if (!raw) return null; const arr = JSON.parse(raw); return Array.isArray(arr) ? arr.map(normalizeBoard).filter(Boolean) : null; }
   catch (_) { return null; }
 }
+// Another tab saving means this tab's copy is out of date; saving it would undo the other tab's
+// work. So this tab stops saving and offers to reload.
+window.addEventListener('storage', e => {
+  if (e.key !== LS_KEY && e.key !== MEM_KEY) return;
+  if (!Store.stale) { Store.stale = true; staleNote(); }
+});
+function staleNote() { toast('Cueboard changed in another tab. Reload to pick up those changes; this tab isn’t saving until you do.', { label: 'Reload', fn: () => location.reload() }); }
 function writeLocalAll() {
+  if (Store.stale) { staleNote(); return true; }
   try { localStorage.setItem(LS_KEY, JSON.stringify(Object.values(S.boards).filter(b => b.saved).map(b => Object.assign({ id: b.id }, serialize(b))))); return true; }
   catch (_) { return false; }
 }
@@ -1681,7 +1691,9 @@ async function writeBoard(id) {
       Store.mode = canLocal() ? 'local' : 'memory';
     }
   }
-  if (Store.mode === 'local') { if (writeLocalAll()) { if (!dirty.size) setStatus('local'); return; } Store.mode = 'memory'; }
+  // Full storage: say so and try again on the next save (space may have been freed), rather than
+  // giving up on saving for the rest of the session.
+  if (Store.mode === 'local') { if (writeLocalAll()) { if (!dirty.size) setStatus('local'); return; } setStatus('full'); return; }
   setStatus('memory');
 }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flush(); });
@@ -1708,8 +1720,12 @@ function switchBoard(id) {
   const b = board();
   if (S.booted && b.meetingId) track('board_opened');
   if (b.reflow) requestAnimationFrame(() => { if (S.boardId !== b.id || !b.reflow) return; delete b.reflow; settle(true); scheduleSave(b.id); });
-  // The timer runs for as long as the plan does.
-  if (!T.running && !tElapsed()) { const parts = phaseCards(); if (parts.length > 1) { T.len = parts.at(-1).to; tRender(); } }
+  // The timer runs for as long as this board's plan does, else its meeting, else 45 minutes.
+  if (!T.running && !tElapsed()) {
+    const parts = phaseCards(), m = b.meetingId && Mem.data ? Mem.data.meetings.find(x => x.id === b.meetingId) : null;
+    T.len = parts.length > 1 ? Math.max(...parts.map(p => p.to)) : m && m.durationMin > 0 ? m.durationMin : 45;
+    tRender();
+  }
   // Brought up to date while you were elsewhere: say what changed, once.
   if (b.news) { toast(b.news); delete b.news; }
   if (b.settle) {
@@ -1758,6 +1774,9 @@ async function boardFromSample(sampleId) {
 }
 async function deleteBoard(id) {
   if (!S.boards[id]) return;
+  // Deleting a meeting's board means "don't draft this one", not "draft it again in a minute".
+  const mid = S.boards[id].meetingId, m = mid && Mem.data && Mem.data.meetings.find(x => x.id === mid);
+  if (m && !Object.values(S.boards).some(b => b.id !== id && b.meetingId === mid)) { m.boardDismissed = true; saveMemory(); }
   delete S.boards[id]; dirty.delete(id);
   await Store.remove(id);
   const rest = Object.values(S.boards).sort((a, b) => b.updatedAt - a.updatedAt);
@@ -2010,7 +2029,14 @@ const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(
 async function loadMemory() {
   await Store.ready;
   let raw = null;
-  if (Store.mode === 'db' && Store.col) { try { const d = await Store.col.doc('memory').get(); if (d.exists) raw = d.data(); } catch (_) { } }
+  // A read that fails isn't an empty memory: saving over it would erase what's stored. Tried a
+  // second time, then nothing is saved this session.
+  if (Store.mode === 'db' && Store.col) {
+    for (let i = 0; i < 2 && !raw; i++) {
+      try { const d = await Store.col.doc('memory').get(); if (d.exists) raw = d.data(); Mem.unreadable = false; break; }
+      catch (_) { Mem.unreadable = true; await sleep(600); }
+    }
+  }
   if (!raw) { try { const t = localStorage.getItem(MEM_KEY); if (t) raw = JSON.parse(t); } catch (_) { } }
   Mem.data = Engine && Engine.reviveMemory ? Engine.reviveMemory(raw, 'me') : null;
   if (S.boardId) updateGoalBar(); // the board on screen may be a meeting's, now that memory says so
@@ -2018,6 +2044,8 @@ async function loadMemory() {
 }
 async function saveMemory() {
   queueToday(); queuePrep();
+  if (Mem.unreadable) { toast('Your saved memory couldn’t be read, so nothing new is saved. Reload the page to try again.'); return false; }
+  if (Store.stale) { staleNote(); return false; }
   if (Store.mode === 'db' && Store.col) { try { await Store.col.doc('memory').set(JSON.parse(JSON.stringify(Mem.data))); return true; } catch (_) { } }
   try { localStorage.setItem(MEM_KEY, JSON.stringify(Mem.data)); return true; }
   catch (_) { toast('Memory is full in this browser, so this wasn’t saved'); return false; }
@@ -2319,25 +2347,51 @@ function sheetReview() {
 // opts.open false: make it and keep it for later (Today shows it as ready). opts.auto: drafted
 // without anyone asking. A meeting that already has a drafted board gets that board brought up
 // to date instead of a second one.
-async function boardFromMemory(meetingId, added, opts) {
+// One draft per meeting at a time: a second request waits for the first (an auto-draft and a
+// click on "Make the board" would otherwise both run, and bill, the same reading).
+const DRAFTING = new Map();
+function boardFromMemory(meetingId, added, opts) {
+  const was = DRAFTING.get(meetingId) || Promise.resolve();
+  const run = was.catch(() => { }).then(() => {
+    // An automatic draft that another one just finished has nothing left to do.
+    if (opts && opts.auto && DRAFTING.get(meetingId) !== run && boardFor(meetingId) && !(opts && opts.goal)) return boardFor(meetingId).id;
+    return draftFromMemory(meetingId, added, opts);
+  }).finally(() => { if (DRAFTING.get(meetingId) === run) DRAFTING.delete(meetingId); });
+  DRAFTING.set(meetingId, run);
+  return run;
+}
+async function draftFromMemory(meetingId, added, opts) {
   opts = opts || {};
   const open = opts.open !== false;
   await (Mem.ready || (Mem.ready = loadMemory()));
   const llm = await memoryModel();
-  // Before the board: look up who's coming, if they haven't been lately.
-  if (llm && llm.research && researchOn() && Engine.researchMeeting && Engine.researchPlan && Engine.researchPlan(Mem.data, meetingId, new Date().toISOString())) {
+  // Before the board: look up who's coming, if they haven't been lately. What's found is saved
+  // into memory as it is when the search ends, so a paste or sync meanwhile isn't lost.
+  if (llm && llm.research && researchOn() && Engine.researchFind && Engine.researchPlan(Mem.data, meetingId, new Date().toISOString())) {
     if (open) toast('Looking up who you’re meeting…');
     try {
-      const rr = await Engine.researchMeeting(Mem.data, meetingId, new Date().toISOString(), llm);
-      if (rr) { Mem.data = rr.memory; await saveMemory(); if (rr.added) track('researched', { n: rr.added }); }
+      const found = await Engine.researchFind(Mem.data, meetingId, new Date().toISOString(), llm);
+      if (found) {
+        const rr = Engine.researchSave(Mem.data, found, new Date().toISOString());
+        Mem.data = rr.memory; await saveMemory();
+        if (rr.added) track('researched', { n: rr.added });
+      }
     } catch (_) { }
   }
   if (llm && open) toast('Reading the meeting…');
   const inputs = Engine.meetingInputs ? Engine.meetingInputs(Mem.data, meetingId, Date.now()) : '';
   let r = null;
-  try { r = await Engine.boardForMemory(Mem.data, meetingId, new Date().toISOString(), llm); } catch (_) { r = null; }
+  try { r = await Engine.boardForMemory(Mem.data, meetingId, new Date().toISOString(), llm, myZone()); } catch (_) { r = null; }
   if (!r) { if (!opts.auto) toast('That meeting isn’t in memory'); return null; }
+  // Asked for by name, a meeting whose board was deleted is drafted again.
+  if (!opts.auto) { const m = Mem.data.meetings.find(x => x.id === meetingId); if (m && m.boardDismissed) { delete m.boardDismissed; saveMemory(); } }
   const prior = boardFor(meetingId);
+  // Drafted in the background but the board is on screen now: offer the update, don't make it.
+  if (opts.auto && prior && prior.gen && S.boardId === prior.id && !TD.open && !sheetOpen()) {
+    const key = prior.id + ':' + inputs;
+    if (!AP.offered.has(key)) { AP.offered.add(key); toast('There’s new information for this board.', { label: 'Update it', fn: () => boardFromMemory(meetingId, 0, { open: true }) }); }
+    return prior.id;
+  }
   if (prior && prior.gen && Engine.mergeRefresh) {
     const res = refreshBoard(prior, r, inputs, !!opts.auto);
     track('board_refreshed', { kind: opts.auto ? 'auto' : 'asked', n: res.updated + res.added + res.removed });
@@ -2704,16 +2758,25 @@ async function connectLink(url) {
 
 // An invite file, dropped or pasted: its meetings go into memory the way the calendar's do. An
 // invite only adds; it never takes other meetings away.
+const INVITES_WAITING = [];
 async function importInvites(text) {
   await (Mem.ready || (Mem.ready = loadMemory()));
   if (!Mem.data) return;
   const self = (Mem.data.user && Mem.data.user.email) || CAL.email;
   if (!self) {
-    // Without knowing which guest is you, you'd end up as a guest at your own meeting.
-    R = { mode: 'prep', afterYou: () => { closeSheet(); importInvites(text); } };
+    // Without knowing which guest is you, you'd end up as a guest at your own meeting. Invites
+    // dropped meanwhile wait together; left without an email, they're not added.
+    INVITES_WAITING.push(text);
+    if (INVITES_WAITING.length > 1) return false;
+    R = { mode: 'prep', afterYou: () => {
+      closeSheet();
+      const all = INVITES_WAITING.splice(0);
+      if (Mem.data.user && Mem.data.user.email) importInvites(all.join('\n'));
+      else toast('Invites need your email, so Cueboard can tell you from the guests. Add it in About you.');
+    } };
     sheet.hidden = false; sheetYou();
     toast('Add your email first, so Cueboard can tell you from the guests.');
-    return;
+    return false;
   }
   let cal;
   const now = Date.now(), at = new Date(now).toISOString();
@@ -2758,8 +2821,8 @@ async function autoPrep() {
       }
       if (!id) break;
       TD.busy.add(id); queueToday();
-      const bid = await boardFromMemory(id, 0, { open: false, auto: true });
-      TD.busy.delete(id); queueToday();
+      let bid = null;
+      try { bid = await boardFromMemory(id, 0, { open: false, auto: true }); } catch (_) { } finally { TD.busy.delete(id); queueToday(); }
       if (!bid) AP.skip.add(id);
     }
   } finally { AP.running = false; queueToday(); }
@@ -2873,8 +2936,8 @@ todayEl.addEventListener('keydown', e => { if (e.key === 'Escape' && sheet.hidde
 
 async function makeFromToday(id) {
   TD.busy.add(id); renderToday();
-  const bid = await boardFromMemory(id, 0, { open: false });
-  TD.busy.delete(id); renderToday();
+  let bid = null;
+  try { bid = await boardFromMemory(id, 0, { open: false }); } finally { TD.busy.delete(id); renderToday(); }
   if (bid) toast('Board ready', { label: 'Open', fn: () => openFromToday(id) });
 }
 function openFromToday(id, float) {
@@ -2913,7 +2976,7 @@ function renderToday() {
     for (const m of sec.meetings) list.append(meetingCard(m, sec.key, now));
   }
 
-  const ta = h('textarea', { id: 'td-paste', class: 'in td-ta', rows: 7, placeholder: 'Paste or drop anything about the meeting' });
+  const ta = h('textarea', { id: 'td-paste', 'data-keep': 'td-paste', class: 'in td-ta', rows: 7, placeholder: 'Paste or drop anything about the meeting' });
   ta.value = TD.draft;
   const chips = h('div', { class: 'td-chips' });
   const drawChips = () => {
@@ -2942,8 +3005,20 @@ function renderToday() {
   });
   const readBtn = h('button', { class: 'btn primary td-read', type: 'button', onclick: () => {
     if (!TD.draft.trim()) { ta.focus(); return; }
-    const text = TD.draft; TD.draft = '';
-    if (isInvite(text)) { renderToday(); importInvites(text); return; }
+    const text = TD.draft;
+    if (isInvite(text)) {
+      // Invites become meetings; anything pasted with them is read as usual. Nothing is cleared
+      // until the import has worked.
+      const invites = text.match(/BEGIN:VCALENDAR[\s\S]*?END:VCALENDAR/gi) || [];
+      const rest = invites.reduce((t, inv) => t.replace(inv, ''), text).split(Engine.PASTE_BREAK).map(x => x.trim()).filter(Boolean).join(Engine.PASTE_BREAK);
+      importInvites(invites.join('\n')).then(ok => {
+        if (!ok) return;
+        TD.draft = rest; renderToday();
+        if (rest) openSheet('prep', { text: rest, go: true });
+      });
+      return;
+    }
+    TD.draft = '';
     openSheet('prep', { text, go: true });
   } }, ic('spark'), 'Read them');
   const samples = DEMO.on && DEMO.samples.length ? h('div', { class: 'demo-samples' }, h('span', { class: 'td-muted', text: 'Demo documents:' }),
@@ -2986,7 +3061,7 @@ function meetingCard(m, key, now) {
       h('button', { class: 'btn', type: 'button', onclick: () => openFromToday(m.id, true) }, ic('popout'), 'Float beside the call'));
     if (m.notesFor) act.push(h('button', { class: 'btn', type: 'button', onclick: () => openSheet('notes', { meetingId: m.notesFor }) }, 'Add last call’s notes'));
   } else act.push(h('button', { class: 'btn primary', type: 'button', onclick: () => makeFromToday(m.id) }, ic('spark'), 'Make the board'));
-  if (m.joinUrl && key === 'today' && status !== 'add_notes') act.push(h('a', { class: 'btn', href: m.joinUrl, target: '_blank', rel: 'noopener noreferrer' }, 'Join the call'));
+  if (m.joinUrl && /^https:\/\//i.test(m.joinUrl) && key === 'today' && status !== 'add_notes') act.push(h('a', { class: 'btn', href: m.joinUrl, target: '_blank', rel: 'noopener noreferrer' }, 'Join the call'));
   const note = m.notesFor && status !== 'add_notes' ? h('p', { class: 'td-muted', text: 'Notes from your last call with them aren’t in yet, so the board won’t know where you left off.' }) : null;
   const made = has && status === 'ready' ? boardFor(m.id).gen : null;
   // One line on what it's for shapes the board. Asked for until it's given; changeable after.

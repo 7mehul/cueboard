@@ -8,7 +8,8 @@ import { unrecordedMeetings } from './calendar.ts';
 
 const CONTEXT_KIND: Record<DocKind, ContextDoc['kind']> = { invite: 'invite', email: 'email', notes: 'notes', transcript: 'notes', profile: 'memo', deck: 'deck', other: 'memo' };
 
-export function packetFor(memory: Memory, meetingId: string, now: string): Packet | null {
+// `timeZone` is the user's, for how dates read on the board.
+export function packetFor(memory: Memory, meetingId: string, now: string, timeZone?: string): Packet | null {
   const m = memory.meetings.find(x => x.id === meetingId);
   if (!m) return null;
   const coming = new Set(m.attendeeIds);
@@ -22,6 +23,7 @@ export function packetFor(memory: Memory, meetingId: string, now: string): Packe
   return {
     userId: memory.userId,
     now,
+    ...(timeZone ? { timeZone } : {}),
     ...(memory.user ? { user: memory.user } : {}),
     context,
     meeting: { id: m.id, title: m.title, startsAt: m.startsAt, durationMin: m.durationMin, ...(m.goal ? { goal: m.goal } : {}), attendeeIds: m.attendeeIds },

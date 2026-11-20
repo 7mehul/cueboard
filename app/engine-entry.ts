@@ -17,7 +17,7 @@ import { todayModel } from '../src/memory/today.ts';
 import { granolaToDoc } from '../src/memory/granola.ts';
 import { meetingInputs, prepPlan, syncCalendar } from '../src/memory/calendar.ts';
 import { parseIcs } from '../src/memory/ics.ts';
-import { researchMeeting, researchPlan } from '../src/memory/research.ts';
+import { researchFind, researchMeeting, researchPlan, researchSave } from '../src/memory/research.ts';
 import { mergeRefresh } from '../src/refresh.ts';
 import { emptyMemory } from '../src/memory/types.ts';
 import type { Doc, Memory } from '../src/memory/types.ts';
@@ -68,7 +68,7 @@ export async function boardForSmart(sampleId: string, sample: unknown) {
 // Which model the page can use: Claude inside a published artifact, or the local server's.
 export function modelFor(sample: unknown): LLM { return artifactModel(sample as Parameters<typeof artifactModel>[0]); }
 export function localModel(): LLM { return serverModel('/api/llm', 'local'); }
-export { serverStatus, upcoming, splitPaste, PASTE_BREAK, todayModel, granolaToDoc, syncCalendar, meetingInputs, prepPlan, mergeRefresh, parseIcs, researchMeeting, researchPlan };
+export { serverStatus, upcoming, splitPaste, PASTE_BREAK, todayModel, granolaToDoc, syncCalendar, meetingInputs, prepPlan, mergeRefresh, parseIcs, researchMeeting, researchPlan, researchFind, researchSave };
 
 // Memory as saved by the page: whatever is missing is filled in, so an older save still loads.
 export function reviveMemory(raw: unknown, userId: string): Memory {
@@ -129,8 +129,8 @@ export function saveDocuments(memory: Memory, read: { doc: Doc; proposal?: Propo
   return { memory: m, added, ...(meetingId ? { meetingId } : {}) };
 }
 
-export async function boardForMemory(memory: Memory, meetingId: string, now: string, llm: LLM | null) {
-  const p = packetFor(memory, meetingId, now);
+export async function boardForMemory(memory: Memory, meetingId: string, now: string, llm: LLM | null, timeZone?: string) {
+  const p = packetFor(memory, meetingId, now, timeZone);
   if (!p) return null;
   const r = await buildBoardSmart(p, llm);
   // Goals to offer in one tap when the user hasn't said theirs: the model's reading and its

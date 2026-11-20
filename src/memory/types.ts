@@ -26,6 +26,8 @@ export interface MeetingRecord {
   cancelled?: boolean;
   // People someone added from a paste, kept on the meeting whatever the calendar's guest list says.
   pastedAttendeeIds?: string[];
+  // The user deleted this meeting's board: it isn't drafted again unless they ask.
+  boardDismissed?: boolean;
 }
 
 // The document itself, kept so the model can read it again when preparing for these people.
