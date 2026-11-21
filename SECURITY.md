@@ -12,9 +12,11 @@ Useful to include: what you found, how to reproduce it, and what someone could d
 
 ## What's in scope
 
-- The local server (`scripts/serve.ts`): it should only answer the page it serves, and keys
-  (Anthropic, Google, Granola) should never reach the browser.
-- The hosted mode (`--hosted`): invite codes, session cookies, rate limits, the sealed Google grant.
+- The server (`scripts/serve.ts`): it should only answer the page it serves, and keys
+  (Anthropic, Google, Granola) should never reach the browser. Without a password it should answer
+  only its own machine.
+- The password for self-hosted servers (`CUE_PASSWORD`, `scripts/auth.ts`): sessions, the limit on
+  guesses, and that nothing but `/healthz` and the sign-in page is reachable without it.
 - Calendar links: the server fetches the link a user gives it, so it must never reach a private or
   internal address (`scripts/calendar-link.ts`).
 - Anything that lets one person's memory, boards or documents reach another person or a model
@@ -25,6 +27,5 @@ Useful to include: what you found, how to reproduce it, and what someone could d
 - Boards and memory live in the browser (or a Claude artifact's own storage), not on the server.
 - Keys stay in the server's environment. Text you paste is sent to Anthropic to be read. With
   research on, the names and companies of the people you meet go to Claude's web search.
-- A calendar's private link is sealed into a cookie and never logged.
-- `deploy/local.env` holds public sample values for trying the hosted mode on your own machine;
-  the server refuses them anywhere else.
+- A calendar's private link and a Google grant are sealed into a cookie with a key the server keeps
+  in its data folder (`local.key`), and never logged.

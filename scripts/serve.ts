@@ -1,16 +1,18 @@
-// Serve dist/ on this machine only, rebuild the app when its sources change, and run model steps
-// for the page with the credentials in this terminal, so no key ever reaches the browser.
-// Usage: node scripts/serve.ts [port] [--fake-model] [--fake-granola] [--hosted]
-//   With ANTHROPIC_API_KEY (or a signed-in profile) set, the page gets Claude (CUE_MODEL to pick).
+// Cueboard's server: it serves the app, rebuilds it when its sources change, and runs model steps
+// for the page with the credentials in its own environment, so no key ever reaches the browser.
+// Usage: node scripts/serve.ts [port] [--demo] [--fake-model] [--fake-granola] [--fake-calendar] [--no-watch]
+//   With ANTHROPIC_API_KEY (or an `ant auth login` sign-in) the page gets Claude (CUE_MODEL to pick).
 //   With GRANOLA_API_KEY set, the page can bring in Granola notes (read-only).
-//   With GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET set, people can connect Google Calendar.
+//   With GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET set, you can sign in to Google Calendar.
 //   --fake-model answers for the sample documents only; --fake-granola serves two sample notes;
 //   --fake-calendar serves a sample week of meetings and connects without Google.
 //   --demo serves a whole founder's week to explore (scenarios/demo.ts): its calendar, its Granola
 //   notes, and memory to start from, which the page offers to load. Add --fake-model to play it
 //   without a key; with ANTHROPIC_API_KEY set, Claude reads it.
-//   --hosted is the test version on the internet: invite codes, a daily allowance of model calls
-//   per tester, and a usage log. It needs CUE_INVITES and CUE_SECRET; see README "Hosted test".
+// Self-hosting (README "Self-hosting"): by default it answers this machine only, with no password.
+// With CUE_PASSWORD set, every page and call needs that password once per browser, and CUE_HOST
+// can open it to other machines (0.0.0.0; the Docker image does this). PORT picks the port, and
+// CUE_DATA_DIR where the key that seals sign-ins and calendar access is kept (./data by default).
 import { createServer } from 'node:http';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
@@ -21,18 +23,29 @@ import { resolve } from 'node:path';
 import { SCHEMAS } from '../src/intel/schemas.ts';
 import { LLMError } from '../src/intel/llm.ts';
 import type { Found, LLM, Usage as Tokens } from '../src/intel/llm.ts';
-import { Limiter, Usage, clientEvent, cookie, parseInvites, sessionName, sessionToken, SESSION_DAYS } from './gate.ts';
-import { adminPage, joinPage } from './hosted-pages.ts';
+import { Limiter, MIN_PASSWORD, SESSION_DAYS, clientAddress, cookie, passwordMatches, sessionToken, sessionValid, signInPage } from './auth.ts';
 import { GoogleError, authUrl, exchangeCode, listEvents, refreshAccess, revoke, sealer } from './google.ts';
 import { LinkError, fetchFeed } from './calendar-link.ts';
 import { parseIcs } from '../src/memory/ics.ts';
 
+// A setting left empty (a copied .env.example) counts as not set.
+for (const k of Object.keys(process.env)) if (/^(CUE_|ANTHROPIC_|GOOGLE_|GRANOLA_|PORT$)/.test(k) && !process.env[k]?.trim()) delete process.env[k];
+
 const args = process.argv.slice(2);
-const hosted = args.includes('--hosted');
 const argPort = Number(args.find(a => /^\d+$/.test(a)));
-const port = hosted ? Number(process.env.PORT) || argPort || 10000 : argPort || 5180;
+const port = argPort || Number(process.env.PORT) || 5180;
+const host = process.env.CUE_HOST || '127.0.0.1';
+const password = process.env.CUE_PASSWORD ?? '';
+const locked = !!password;
 const dist = process.env.CUE_DIST ? pathToFileURL(resolve(process.env.CUE_DIST) + '/') : new URL('../dist/', import.meta.url);
+const data = process.env.CUE_DATA_DIR ? pathToFileURL(resolve(process.env.CUE_DATA_DIR) + '/') : new URL('../data/', import.meta.url);
 const origins = new Set([`http://localhost:${port}`, `http://127.0.0.1:${port}`]);
+
+const fail = (msg: string): never => { console.error(`Cueboard didn’t start: ${msg}`); process.exit(1); };
+if (!/^(127\.\d{1,3}\.\d{1,3}\.\d{1,3}|::1|localhost)$/i.test(host) && !locked) {
+  fail(`CUE_HOST=${host} lets other machines reach Cueboard, so set CUE_PASSWORD too. Without it, anyone who finds the address could use your Anthropic key and read your notes.`);
+}
+if (locked && password.length < MIN_PASSWORD) fail(`CUE_PASSWORD needs at least ${MIN_PASSWORD} characters. One way to make one: openssl rand -base64 18`);
 
 // A sign-in saved by `ant auth login` on this machine counts as a key. The SDK finds it itself;
 // this only asks whether there is one.
@@ -42,60 +55,44 @@ async function signedIn() {
 
 let llm: LLM | null = null;
 if (args.includes('--fake-model')) llm = (await import('../scenarios/fake-model.ts')).fakeModel();
-else if (process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN || process.env.ANTHROPIC_PROFILE || (!hosted && await signedIn())) {
+else if (process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN || process.env.ANTHROPIC_PROFILE || await signedIn()) {
   llm = (await import('../src/intel/providers/claude.ts')).claude();
 }
 
-// The hosted version's settings. It refuses to start half-configured.
-const fail = (msg: string): never => { console.error(`Can't start the hosted version: ${msg}`); process.exit(1); };
-const H = hosted ? (() => {
-  let invites: Map<string, string> = new Map();
-  try { invites = parseInvites(process.env.CUE_INVITES ?? ''); } catch (e) { fail(`CUE_INVITES: ${(e as Error).message}`); }
-  if (!invites.size) fail('set CUE_INVITES to name:code pairs (node scripts/invite.ts makes them)');
-  const secret = process.env.CUE_SECRET ?? '';
-  if (secret.length < 32) fail('set CUE_SECRET to at least 32 random characters; it signs everyone’s session');
-  const names = new Set(invites.values());
-  const admins = new Set((process.env.CUE_ADMINS ?? '').split(/[,\s]+/).filter(n => names.has(n)));
-  const num = (v: string | undefined, d: number) => (Number.isInteger(Number(v)) && Number(v) > 0 ? Number(v) : d);
-  return {
-    invites, names, codes: new Map([...invites].map(([code, name]) => [name, code])), secret, admins, sample: /not-for-hosting/.test(secret),
-    perTester: num(process.env.CUE_DAILY_CALLS, 150), total: num(process.env.CUE_DAILY_TOTAL, 1000),
-    usage: new Usage(process.env.CUE_DATA_DIR || null), joins: new Limiter(10, 10 * 60_000),
-  };
-})() : null;
-if (H) await H.usage.load();
-
 // Granola, read-only, with a personal API key from Granola's Settings → Connectors → API keys.
-// Never in the hosted version: the key would hand one person's notes to every tester.
 const GRANOLA = 'https://public-api.granola.ai/v1';
-const granolaKey = hosted ? undefined : process.env.GRANOLA_API_KEY;
-if (hosted && process.env.GRANOLA_API_KEY) console.warn('GRANOLA_API_KEY is ignored in the hosted version');
-const demo = !hosted && args.includes('--demo') ? await import('../scenarios/demo.ts') : null;
-const sampleNotes = !hosted && args.includes('--fake-granola') ? (await import('../scenarios/granola.ts')).GRANOLA_NOTES : null;
+const granolaKey = process.env.GRANOLA_API_KEY;
+const demo = args.includes('--demo') ? await import('../scenarios/demo.ts') : null;
+const sampleNotes = args.includes('--fake-granola') ? (await import('../scenarios/granola.ts')).GRANOLA_NOTES : null;
 // Sample notes, dated from today when they're the demo's.
 const fakeNotes = () => (demo ? demo.demoWorld(new Date()).granola : sampleNotes);
 const fakeGranola = !!(demo || sampleNotes);
 
-// Google Calendar, read-only. The grant is sealed into a cookie with the hosted secret, or with a
-// key this machine keeps in data/ (never committed), so restarting keeps people connected.
+// Google Calendar, read-only. The grant is sealed into a cookie with a key this server keeps in its
+// data folder (never committed), so restarting keeps you connected and signed in.
 const googleId = process.env.GOOGLE_CLIENT_ID, googleSecret = process.env.GOOGLE_CLIENT_SECRET;
 const fakeCalendar = args.includes('--fake-calendar') || demo ? await import('../scenarios/calendar.ts') : null;
 const sampleEvents = (now: Date) => (demo ? demo.demoWorld(now).events : fakeCalendar!.fakeEvents(now));
 const calendarOn = !!(googleId && googleSecret) || !!fakeCalendar;
-async function localKey(): Promise<string> {
-  const dir = new URL('../data/', import.meta.url), file = new URL('local.key', dir);
+async function serverKey(): Promise<string> {
+  const file = new URL('local.key', data);
   const k = (await readFile(file, 'utf8').catch(() => '')).trim();
   if (k.length >= 32) return k;
-  await mkdir(dir, { recursive: true });
   const fresh = randomBytes(32).toString('hex');
-  await writeFile(file, fresh, { mode: 0o600 });
+  try {
+    await mkdir(data, { recursive: true });
+    await writeFile(file, fresh, { mode: 0o600 });
+  } catch (e) { fail(`couldn’t keep its key in ${fileURLToPath(data)} (${(e as Error).message}). Set CUE_DATA_DIR to a folder it can write to.`); }
   return fresh;
 }
-const seal = sealer(H ? H.secret : await localKey());
+const key = await serverKey();
+const seal = sealer(key);
+const sessionSecret = 'cueboard/session/' + key;
 
 const build = fileURLToPath(new URL('./build-app.ts', import.meta.url));
-// Hosted (and --no-watch, for tests) builds once; locally it rebuilds on every change.
-if (hosted || args.includes('--no-watch')) { if (spawnSync(process.execPath, [build], { stdio: 'inherit' }).status !== 0) fail('the app didn’t build'); }
+// While you work on it, it rebuilds on every change. On a server (a password, NODE_ENV=production,
+// or --no-watch) it builds once.
+if (locked || process.env.NODE_ENV === 'production' || args.includes('--no-watch')) { if (spawnSync(process.execPath, [build], { stdio: 'inherit' }).status !== 0) fail('the app didn’t build'); }
 else spawn(process.execPath, [build, '--watch'], { stdio: 'inherit' });
 
 const send = (res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}) => {
@@ -117,49 +114,31 @@ const json = (raw: string | null): any => { try { return raw ? JSON.parse(raw) :
 // Only the page served here may call the API: the request has to carry the header a cross-site
 // form or image can't send, from this server's own origin, so other sites can't spend the key.
 const https = (req: IncomingMessage) => String(req.headers['x-forwarded-proto'] ?? '').split(',')[0].trim() === 'https';
-// Locally the server also checks it was addressed as this machine: a page on another site that
-// rebinds its own name to 127.0.0.1 would otherwise count as "same origin".
-const hostOk = (req: IncomingMessage) => hosted || origins.has(`http://${String(req.headers.host ?? '').toLowerCase()}`);
+// Without a password the server also checks it was addressed as this machine: a page on another
+// site that rebinds its own name to 127.0.0.1 would otherwise count as "same origin". With one,
+// it answers to whatever name it's reached by (a domain, behind a proxy) and the password guards it.
+const hostOk = (req: IncomingMessage) => locked || origins.has(`http://${String(req.headers.host ?? '').toLowerCase()}`);
 function allowed(req: IncomingMessage) {
   if (req.headers['x-cueboard'] !== '1' || !hostOk(req)) return false;
   const origin = req.headers.origin;
   if (!origin) return true;
-  return hosted ? origin === `${https(req) ? 'https' : 'http'}://${req.headers.host}` : origins.has(origin);
+  return locked ? origin === `${https(req) ? 'https' : 'http'}://${req.headers.host}` : origins.has(origin);
 }
 const notAllowed = (res: ServerResponse) => send(res, 403, { error: { code: 'other', message: 'Not allowed' } });
 
-// The hosted allowance: model calls per tester per day, and for everyone together, counted when
-// a call starts, so a failing call still counts. It resets at midnight UTC.
-const running = new Map<string, number>();
-const MAX_AT_ONCE = 3;
-function overAllowance(res: ServerResponse, who: string | null): boolean {
-  if (!H || !who) return false;
-  const busy = running.get(who) ?? 0;
-  const mine = H.usage.today(who, 'model') + busy, all = H.usage.todayAll() + [...running.values()].reduce((a, b) => a + b, 0);
-  if (busy >= MAX_AT_ONCE) { send(res, 429, { error: { code: 'rate_limited', message: 'A few things are already being read for you. Try again in a moment.' } }); return true; }
-  if (mine < H.perTester && all < H.total) { running.set(who, busy + 1); return false; }
-  send(res, 429, { error: { code: 'rate_limited', message: mine >= H.perTester
-    ? `That’s today’s ${H.perTester} model calls for you, the test’s daily limit. It resets at midnight UTC; boards still open and Float still works.`
-    : 'The test has used today’s model calls for everyone. It resets at midnight UTC.' } });
-  return true;
-}
-const logModel = (who: string | null, kind: string, t0: number, tokens: number | undefined, ok: boolean) => {
-  if (who) { const n = (running.get(who) ?? 1) - 1; if (n > 0) running.set(who, n); else running.delete(who); }
-  if (H && who) H.usage.record({ t: new Date().toISOString(), who, ev: 'model', kind, ms: Date.now() - t0, ok, ...(tokens ? { tokens } : {}) });
-};
-const tag = (who: string | null) => (who ? ` · ${who}` : '');
+const log = (what: string, t0: number, tokens?: number, extra = '') =>
+  console.log(`${what} · ${((Date.now() - t0) / 1000).toFixed(1)}s${tokens ? ` · ${tokens.toLocaleString()} tokens` : ''}${extra}`);
 
 const EFFORTS = new Set(['low', 'medium', 'high']);
-async function api(req: IncomingMessage, res: ServerResponse, who: string | null) {
+async function api(req: IncomingMessage, res: ServerResponse) {
   if (!allowed(req)) { notAllowed(res); return; }
-  if (req.method === 'GET') { send(res, 200, { available: !!llm, chat: !!llm?.text, ...(llm ? { model: llm.name } : {}), ...(hosted ? { hosted: true } : {}) }); return; }
+  if (req.method === 'GET') { send(res, 200, { available: !!llm, chat: !!llm?.text, ...(llm ? { model: llm.name } : {}) }); return; }
   if (req.method !== 'POST') { send(res, 405, { error: { code: 'other', message: 'Use POST' } }); return; }
   if (!llm) { send(res, 503, { error: { code: 'unavailable', message: 'No model: start the server with ANTHROPIC_API_KEY set' } }); return; }
   const body = json(await readBody(req, 2_000_000)) as { step?: string; system?: string; prompt?: string; effort?: 'low' | 'medium' | 'high'; maxTokens?: number } | null;
   const schema = typeof body?.step === 'string' && Object.hasOwn(SCHEMAS, body.step) ? SCHEMAS[body.step as keyof typeof SCHEMAS] : undefined;
   if (!body || !schema || typeof body.system !== 'string' || typeof body.prompt !== 'string') { send(res, 400, { error: { code: 'other', message: 'Unknown step or missing prompt' } }); return; }
-  if (overAllowance(res, who)) return;
-  const maxTokens = Number.isInteger(body.maxTokens) && body.maxTokens! > 0 ? Math.min(body.maxTokens!, hosted ? 32_000 : 128_000) : undefined;
+  const maxTokens = Number.isInteger(body.maxTokens) && body.maxTokens! > 0 ? Math.min(body.maxTokens!, 128_000) : undefined;
   if (body.effort !== undefined && !EFFORTS.has(body.effort)) { send(res, 400, { error: { code: 'other', message: 'Unknown effort' } }); return; }
   const t0 = Date.now();
   try {
@@ -168,37 +147,32 @@ async function api(req: IncomingMessage, res: ServerResponse, who: string | null
     if (body.step === 'research' && !llm.research) throw new LLMError('unavailable', 'This model can’t search the web');
     const r: { value: unknown; usage?: Tokens; found?: Found[] } = body.step === 'research' ? await llm.research!(q) : await llm.json(q);
     const tokens = r.usage ? r.usage.inputTokens + r.usage.outputTokens : undefined;
-    console.log(`${body.step}${tag(who)} · ${((Date.now() - t0) / 1000).toFixed(1)}s${tokens ? ` · ${tokens.toLocaleString()} tokens` : ''}${r.found ? ` · ${r.found.length} pages` : ''}`);
-    logModel(who, body.step!, t0, tokens, true);
+    log(body.step!, t0, tokens, r.found ? ` · ${r.found.length} pages` : '');
     send(res, 200, { value: r.value, ...(r.found ? { found: r.found } : {}), ...(r.usage ? { usage: r.usage } : {}) });
   } catch (e) {
     const err = e instanceof LLMError ? { code: e.code, message: e.message } : { code: 'other', message: (e as Error).message };
-    console.log(`${body.step}${tag(who)} failed · ${err.code}: ${err.message}`);
-    logModel(who, body.step!, t0, undefined, false);
+    console.log(`${body.step} failed · ${err.code}: ${err.message}`);
     send(res, 502, { error: err });
   }
 }
 
 // A conversation turn for the board assistant: plain text back, which the page parses.
-async function chatApi(req: IncomingMessage, res: ServerResponse, who: string | null) {
+async function chatApi(req: IncomingMessage, res: ServerResponse) {
   if (!allowed(req)) { notAllowed(res); return; }
   if (req.method !== 'POST') { send(res, 405, { error: { code: 'other', message: 'Use POST' } }); return; }
   if (!llm?.text) { send(res, 503, { error: { code: 'unavailable', message: 'No model for the assistant: start the server with ANTHROPIC_API_KEY set' } }); return; }
   const body = json(await readBody(req, 2_000_000)) as { messages?: { role: 'user' | 'assistant'; content: string }[]; effort?: 'low' | 'medium' | 'high' } | null;
   const ok = Array.isArray(body?.messages) && body!.messages!.length > 0 && body!.messages!.every(m => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string');
   if (!ok) { send(res, 400, { error: { code: 'other', message: 'Missing messages' } }); return; }
-  if (overAllowance(res, who)) return;
   const t0 = Date.now();
   try {
     const r = await llm.text({ messages: body!.messages!, effort: EFFORTS.has(body!.effort as string) ? body!.effort! : 'medium' });
     const tokens = r.usage ? r.usage.inputTokens + r.usage.outputTokens : undefined;
-    console.log(`assistant${tag(who)} · ${((Date.now() - t0) / 1000).toFixed(1)}s${tokens ? ` · ${tokens.toLocaleString()} tokens` : ''}`);
-    logModel(who, 'assistant', t0, tokens, true);
+    log('assistant', t0, tokens);
     send(res, 200, { text: r.text });
   } catch (e) {
     const err = e instanceof LLMError ? { code: e.code, message: e.message } : { code: 'other', message: (e as Error).message };
-    console.log(`assistant${tag(who)} failed · ${err.code}: ${err.message}`);
-    logModel(who, 'assistant', t0, undefined, false);
+    console.log(`assistant failed · ${err.code}: ${err.message}`);
     send(res, 502, { error: err });
   }
 }
@@ -221,7 +195,7 @@ const granolaError = (status: number) =>
 async function granolaApi(req: IncomingMessage, res: ServerResponse, path: string, query: URLSearchParams) {
   if (!allowed(req)) { notAllowed(res); return; }
   if (req.method !== 'GET') { send(res, 405, { error: { code: 'other', message: 'Read-only' } }); return; }
-  if (path === '/api/granola') { send(res, 200, { available: !!(granolaKey || fakeGranola), ...(fakeGranola ? { fake: true } : {}), ...(hosted ? { hosted: true } : {}) }); return; }
+  if (path === '/api/granola') { send(res, 200, { available: !!(granolaKey || fakeGranola), ...(fakeGranola ? { fake: true } : {}) }); return; }
   if (!granolaKey && !fakeGranola) { send(res, 503, { error: { code: 'unavailable', message: 'Start Cueboard with GRANOLA_API_KEY set to bring in Granola notes.' } }); return; }
   try {
     if (path === '/api/granola/notes') {
@@ -294,12 +268,12 @@ const zoneOf = (req: IncomingMessage) => {
   const z = new URL(req.url ?? '/', 'http://x').searchParams.get('tz') ?? '';
   try { return z && z.length < 64 ? (new Intl.DateTimeFormat('en-US', { timeZone: z }), z) : undefined; } catch { return undefined; }
 };
-async function calendarApi(req: IncomingMessage, res: ServerResponse, path: string, who: string | null) {
+async function calendarApi(req: IncomingMessage, res: ServerResponse, path: string) {
   if (!allowed(req)) { notAllowed(res); return; }
   const grant = grantOf(req);
   const via = grant?.ics ? 'link' : grant?.fake && fakeCalendar ? 'sample' : grant?.rt && calendarOn ? 'google' : null;
   if (path === '/api/calendar' && req.method === 'GET') {
-    send(res, 200, { configured: calendarOn, link: true, connected: !!via, ...(via ? { via } : {}), ...(fakeCalendar ? { fake: true } : {}), ...(hosted ? { hosted: true } : {}) }); return;
+    send(res, 200, { configured: calendarOn, link: true, connected: !!via, ...(via ? { via } : {}), ...(fakeCalendar ? { fake: true } : {}) }); return;
   }
   // Connecting by link: read it once to be sure it's a calendar, then keep it sealed in the cookie.
   if (path === '/api/calendar/link' && req.method === 'POST') {
@@ -308,13 +282,13 @@ async function calendarApi(req: IncomingMessage, res: ServerResponse, path: stri
     try {
       const now = Date.now();
       const cal = parseIcs(await fetchFeed(body.url), { from: new Date(now - 14 * 864e5).toISOString(), to: new Date(now + 14 * 864e5).toISOString() }, { zone: zoneOf(req) });
-      console.log(`calendar link connected${tag(who)} · ${cal.events.length} events`);
+      console.log(`calendar link connected · ${cal.events.length} events`);
       if (grant?.rt) { await revoke(grant.rt); access.delete(grant.rt); }
       const url = body.url.trim().replace(/^webcals?:\/\//i, 'https://');
       send(res, 200, { ok: true, ...(cal.email ? { email: cal.email } : {}), events: cal.events.length }, { 'set-cookie': `${GCAL}=${seal.seal({ ics: url, at: now })}; ${cookieFlags(req, 365 * 86400)}` });
     } catch (e) {
       const err = e instanceof LinkError ? { code: e.code, message: e.message } : { code: 'bad_link', message: (e as Error).message || 'Couldn’t read that calendar.' };
-      console.log(`calendar link failed${tag(who)} · ${err.code}`);
+      console.log(`calendar link failed · ${err.code}`);
       send(res, 400, { error: err });
     }
     return;
@@ -327,13 +301,13 @@ async function calendarApi(req: IncomingMessage, res: ServerResponse, path: stri
     const now = Date.now(), from = new Date(now - 14 * 864e5).toISOString(), to = new Date(now + 14 * 864e5).toISOString();
     try {
       const cal = parseIcs(await fetchFeed(grant.ics), { from, to }, { zone: zoneOf(req) });
-      console.log(`calendar link${tag(who)} · ${cal.events.length} events${cal.complete ? '' : ' (more than are read)'}`);
+      console.log(`calendar link · ${cal.events.length} events${cal.complete ? '' : ' (more than are read)'}`);
       // Cut short, the list only speaks for the time it reaches; later meetings aren't "gone".
       const until = cal.complete || !cal.events.length ? to : cal.events.at(-1)!.start;
       send(res, 200, { ...(cal.email ? { email: cal.email } : {}), from, to: until, events: cal.events });
     } catch (e) {
       const gone = e instanceof LinkError && e.code === 'gone';
-      console.log(`calendar link failed${tag(who)} · ${e instanceof LinkError ? e.code : 'parse'}`);
+      console.log(`calendar link failed · ${e instanceof LinkError ? e.code : 'parse'}`);
       if (gone) send(res, 401, { error: { code: 'reconnect', message: (e as Error).message } }, { 'set-cookie': `${GCAL}=; ${cookieFlags(req, 0)}` });
       else send(res, 502, { error: { code: 'unavailable', message: (e as Error).message || 'Couldn’t read your calendar.' } });
     }
@@ -348,11 +322,11 @@ async function calendarApi(req: IncomingMessage, res: ServerResponse, path: stri
       let r;
       try { r = await listEvents(await accessToken(grant.rt!), from, to); }
       catch (e) { if (e instanceof GoogleError && e.code === 'expired') r = await listEvents(await accessToken(grant.rt!, true), from, to); else throw e; }
-      console.log(`calendar${tag(who)} · ${r.events.length} events`);
+      console.log(`calendar · ${r.events.length} events`);
       send(res, 200, { ...(r.email ? { email: r.email } : {}), from, to, events: r.events });
     } catch (e) {
       const reconnect = e instanceof GoogleError && e.code === 'reconnect';
-      console.log(`calendar${tag(who)} failed · ${(e as Error).message}`);
+      console.log(`calendar failed · ${(e as Error).message}`);
       if (reconnect) send(res, 401, { error: { code: 'reconnect', message: (e as Error).message } }, { 'set-cookie': `${GCAL}=; ${cookieFlags(req, 0)}` });
       else send(res, 502, { error: { code: 'unavailable', message: `Couldn’t read your calendar: ${(e as Error).message}` } });
     }
@@ -393,65 +367,62 @@ async function oauth(req: IncomingMessage, res: ServerResponse, path: string, qu
   res.writeHead(404).end('not found');
 }
 
-// The hosted front door. Returns who is asking, or answers the request itself and returns null.
+// The password, when there is one. Returns whether the request may go on; if not, it's answered.
 const SESSION = 'cue_session';
-async function gate(req: IncomingMessage, res: ServerResponse, path: string): Promise<string | null> {
-  const h = H!;
-  res.setHeader('x-content-type-options', 'nosniff');
-  res.setHeader('referrer-policy', 'no-referrer');
-  res.setHeader('content-security-policy', "frame-ancestors 'self'");
-  res.setHeader('x-robots-tag', 'noindex');
-  if (https(req)) res.setHeader('strict-transport-security', 'max-age=31536000');
-  // The sample settings in deploy/local.env are public, so with them only this machine gets in.
-  const local = /^(127\.0\.0\.1|::1|::ffff:127\.0\.0\.1)$/.test(req.socket.remoteAddress ?? '') && !req.headers['x-forwarded-for'];
-  if (h.sample && !local) { res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' }).end('This server is using the sample settings from deploy/local.env. Set your own CUE_SECRET and CUE_INVITES.'); return null; }
-  if (path === '/healthz') { res.writeHead(200, { 'content-type': 'text/plain' }).end('ok'); return null; }
-  if (path === '/join') { page(res, 200, joinPage()); return null; }
-  if (path === '/api/join') {
-    if (req.method !== 'POST' || !allowed(req)) { notAllowed(res); return null; }
-    // The proxy in front adds the address it saw at the end; anything before it came from the client.
-    const ip = String(req.headers['x-forwarded-for'] ?? '').split(',').map(x => x.trim()).filter(Boolean).at(-1) || req.socket.remoteAddress || '?';
-    if (!h.joins.allow(ip)) { send(res, 429, { error: { code: 'rate_limited', message: 'Too many tries. Wait ten minutes and try again.' } }); return null; }
-    const code = json(await readBody(req, 2_000))?.code;
-    const name = typeof code === 'string' ? h.invites.get(code.trim()) : undefined;
-    if (!name) { send(res, 401, { error: { code: 'other', message: 'That code isn’t an invite. Check it and try again.' } }); return null; }
-    const flags = `Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}${https(req) ? '; Secure' : ''}`;
-    console.log(`joined · ${name}`);
-    send(res, 200, { ok: true }, { 'set-cookie': `${SESSION}=${sessionToken(name, code.trim(), h.secret)}; ${flags}` });
-    return null;
+const tries = new Limiter(10, 10 * 60_000), allTries = new Limiter(100, 10 * 60_000);
+let warnedHttp = false;
+async function door(req: IncomingMessage, res: ServerResponse, path: string): Promise<boolean> {
+  if (path === '/api/signin') {
+    if (req.method !== 'POST' || !allowed(req)) { notAllowed(res); return false; }
+    // Per address, and for everyone together, so guessing from many addresses is slow too.
+    if (!tries.allow(clientAddress(req.socket.remoteAddress, req.headers['x-forwarded-for'])) || !allTries.allow('*')) {
+      send(res, 429, { error: { code: 'rate_limited', message: 'Too many tries. Wait ten minutes and try again.' } }); return false;
+    }
+    if (!passwordMatches(json(await readBody(req, 2_000))?.password, password)) {
+      console.log('sign-in refused');
+      send(res, 401, { error: { code: 'other', message: 'That isn’t the password.' } }); return false;
+    }
+    if (!https(req) && !/^(127\.|::1$|::ffff:127\.)/.test(req.socket.remoteAddress ?? '') && !warnedHttp) {
+      warnedHttp = true;
+      console.warn('signed in over plain http from another machine: put Cueboard behind HTTPS (README "Self-hosting")');
+    }
+    console.log('signed in');
+    send(res, 200, { ok: true }, { 'set-cookie': `${SESSION}=${sessionToken(sessionSecret, password)}; ${cookieFlags(req, SESSION_DAYS * 86400)}` });
+    return false;
   }
-  const who = sessionName(cookie(req.headers.cookie, SESSION), h.secret, h.codes);
-  if (!who) {
-    if (path.startsWith('/api/')) send(res, 401, { error: { code: 'unavailable', message: 'Your invite has run out on this browser. Open your invite link again.' } });
-    else res.writeHead(302, { location: '/join', 'cache-control': 'no-store' }).end();
-    return null;
-  }
-  if (path === '/admin') {
-    if (!h.admins.has(who)) { res.writeHead(404).end('not found'); return null; }
-    page(res, 200, adminPage(h.usage.summary(), { today: h.usage.todayAll(), perTester: h.perTester, total: h.total, invited: [...h.names] }));
-    return null;
-  }
-  if (path === '/api/event') {
-    if (req.method !== 'POST' || !allowed(req)) { notAllowed(res); return null; }
-    const e = clientEvent(who, json(await readBody(req, 2_000)));
-    if (e && h.usage.today(who, 'event') < 2000) h.usage.record(e);
-    res.writeHead(204).end();
-    return null;
-  }
-  return who;
+  if (sessionValid(cookie(req.headers.cookie, SESSION), sessionSecret, password)) return true;
+  if (path.startsWith('/api/')) send(res, 401, { error: { code: 'unavailable', message: 'You’re signed out of Cueboard. Reload the page to sign in again.' } });
+  else if (path === '/') page(res, 200, signInPage());
+  else res.writeHead(302, { location: '/', 'cache-control': 'no-store' }).end();
+  return false;
 }
 
 async function route(req: IncomingMessage, res: ServerResponse) {
   let url: URL;
   try { url = new URL(req.url ?? '/', 'http://localhost'); } catch { res.writeHead(400).end(); return; }
   const path = url.pathname;
-  let who: string | null = null;
-  if (H) { who = await gate(req, res, path); if (!who) return; }
-  else if (path === '/api/event') { res.writeHead(204).end(); return; }
-  if (path === '/api/llm') { await api(req, res, who); return; }
-  if (path === '/api/chat') { await chatApi(req, res, who); return; }
+  res.setHeader('x-content-type-options', 'nosniff');
+  res.setHeader('referrer-policy', 'no-referrer');
+  res.setHeader('content-security-policy', "frame-ancestors 'self'");
+  if (locked) { res.setHeader('x-robots-tag', 'noindex'); if (https(req)) res.setHeader('strict-transport-security', 'max-age=31536000'); }
+  if (path === '/healthz') { res.writeHead(200, { 'content-type': 'text/plain' }).end('ok'); return; }
+  // Without a password, only this machine's own names. Reached by any other (a proxy, a rebinding
+  // page), it says what to do instead of half-working.
+  if (!hostOk(req)) {
+    res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' }).end(`This Cueboard only answers at http://localhost:${port}. To open it from anywhere else, set CUE_PASSWORD (see README, Self-hosting).`);
+    return;
+  }
+  if (locked && !await door(req, res, path)) return;
+  if (path === '/api/session') {
+    if (!allowed(req)) { notAllowed(res); return; }
+    if (req.method === 'GET') { send(res, 200, { locked }); return; }
+    if (req.method === 'DELETE' && locked) { send(res, 200, { ok: true }, { 'set-cookie': `${SESSION}=; ${cookieFlags(req, 0)}` }); return; }
+    send(res, 405, { error: { code: 'other', message: 'Use GET' } }); return;
+  }
+  if (path === '/api/llm') { await api(req, res); return; }
+  if (path === '/api/chat') { await chatApi(req, res); return; }
   if (path === '/api/granola' || path.startsWith('/api/granola/')) { await granolaApi(req, res, path, url.searchParams); return; }
-  if (path === '/api/calendar' || path.startsWith('/api/calendar/')) { await calendarApi(req, res, path, who); return; }
+  if (path === '/api/calendar' || path.startsWith('/api/calendar/')) { await calendarApi(req, res, path); return; }
   if (path === '/api/demo') {
     if (!demo) { send(res, 404, { error: { code: 'other', message: 'Start Cueboard with --demo for the demo week' } }); return; }
     if (!allowed(req) || req.method !== 'GET') { notAllowed(res); return; }
@@ -464,7 +435,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   if (path !== '/' && path !== '/cueboard.html') { res.writeHead(404).end('not found'); return; }
   try {
     const body = await readFile(new URL('cueboard.html', dist));
-    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', ...(H ? {} : { 'content-security-policy': "frame-ancestors 'self'" }) });
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
     res.end(body);
   } catch {
     res.writeHead(404).end('not found');
@@ -480,6 +451,7 @@ createServer(async (req, res) => {
     if (!res.headersSent) res.writeHead(500, { 'content-type': 'text/plain' });
     res.end();
   }
-}).listen(port, hosted ? '0.0.0.0' : '127.0.0.1', () => console.log(hosted
-  ? `hosted test version on port ${port} · model: ${llm ? llm.name : 'none (set ANTHROPIC_API_KEY)'} · calendar: ${calendarOn ? 'on' : 'off (set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)'} · ${H!.names.size} invites · ${H!.perTester} model calls per tester a day, ${H!.total} in all · usage log: ${process.env.CUE_DATA_DIR ? process.env.CUE_DATA_DIR + '/usage.jsonl' : 'stdout only (set CUE_DATA_DIR to keep it)'}`
-  : `serving http://localhost:${port}${demo ? ' · the demo week' : ''} · model: ${llm ? llm.name : 'none (rules only; run `ant auth login` or set ANTHROPIC_API_KEY for Claude)'} · Granola: ${fakeGranola ? 'sample notes' : granolaKey ? 'connected' : 'off (set GRANOLA_API_KEY)'} · calendar: ${fakeCalendar ? 'sample week' : calendarOn ? 'on' : 'off (set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)'}`));
+}).listen(port, host, () => {
+  const where = locked ? `serving on ${host}:${port}, behind its password` : `serving http://localhost:${port}`;
+  console.log(`${where}${demo ? ' · the demo week' : ''} · model: ${llm ? llm.name : 'none (rules only; run `ant auth login` or set ANTHROPIC_API_KEY for Claude)'} · Granola: ${fakeGranola ? 'sample notes' : granolaKey ? 'connected' : 'off (set GRANOLA_API_KEY)'} · calendar: ${fakeCalendar ? 'sample week' : calendarOn ? 'links and Google' : 'links (set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET for Google sign-in)'}`);
+});

@@ -17,6 +17,8 @@
     "node": ">=26"
   },
   "scripts": {
+    "start": "node --env-file-if-exists=.env scripts/serve.ts",
+    "demo": "node scripts/serve.ts 5190 --demo --fake-model",
     "test": "node --test \"test/**/*.test.ts\"",
     "typecheck": "tsc --noEmit",
     "scale": "node scripts/scale.ts",

@@ -8,7 +8,7 @@ import { Readable } from 'node:stream';
 // Reading a calendar from its private link. The link is a secret (anyone holding it reads the
 // calendar), so it's never logged, and it's kept sealed in the browser's cookie like the Google
 // grant. The server fetches whatever link it's given, so it refuses anything that isn't a public
-// https address: on a hosted server a link to 169.254.169.254 or localhost would otherwise read
+// https address: on a server in the cloud a link to 169.254.169.254 or localhost would otherwise read
 // the machine's own internal services. The check runs again at connect time, on the address
 // actually connected to, so a name that resolves differently the second time gets nowhere.
 

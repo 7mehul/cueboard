@@ -3,8 +3,9 @@ dist
 reports
 data
 .git
+.github
 .claude
-deploy/local.env
+docs
 *.log
 .DS_Store
 .env

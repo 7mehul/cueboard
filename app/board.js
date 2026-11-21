@@ -1718,7 +1718,6 @@ function switchBoard(id) {
   closePop(); closeMenu();
   renderAll(); updateChrome(); updateUndo(); renderChat(); updateCtx();
   const b = board();
-  if (S.booted && b.meetingId) track('board_opened');
   if (b.reflow) requestAnimationFrame(() => { if (S.boardId !== b.id || !b.reflow) return; delete b.reflow; settle(true); scheduleSave(b.id); });
   // The timer runs for as long as this board's plan does, else its meeting, else 45 minutes.
   if (!T.running && !tElapsed()) {
@@ -1837,6 +1836,7 @@ function openMenu(mode) {
     if (!S.boards['b-example']) menu.append(h('button', { class: 'menu-item', type: 'button', role: 'menuitem', onclick: () => { closeMenu(); const ex = makeExample(); S.boards[ex.id] = ex; switchBoard(ex.id); } }, ic('spark'), h('span', { class: 'mi-main' }, h('span', { class: 'mi-title', text: 'Open the example board' }))));
     menu.append(h('button', { class: 'menu-item', type: 'button', role: 'menuitem', onclick: () => openMenu('delete') }, ic('trash'), h('span', { class: 'mi-main' }, h('span', { class: 'mi-title', text: 'Delete this board…' }))));
     // AGPL-3.0: whoever runs Cueboard for others offers them its source. Point this at your fork if you change it.
+    if (SERVER.locked) menu.append(h('button', { class: 'menu-item', type: 'button', role: 'menuitem', onclick: signOut }, ic('back'), h('span', { class: 'mi-main' }, h('span', { class: 'mi-title', text: 'Sign out' }), h('span', { class: 'mi-sub', text: 'Your boards stay in this browser' }))));
     menu.append(h('a', { class: 'menu-src', href: SOURCE_URL, target: '_blank', rel: 'noopener noreferrer' }, 'Source code · AGPL-3.0'));
   }
   menu.hidden = false; $('#b-menu').setAttribute('aria-expanded', 'true');
@@ -2328,7 +2328,6 @@ function sheetReview() {
     const s = Engine.saveDocuments(Mem.data, read, choices, meeting, R.fromDoc);
     Mem.data = s.memory;
     await saveMemory();
-    track('memory_saved', { kind: R.mode, n: s.added });
     closeSheet();
     if (s.meetingId) boardFromMemory(s.meetingId, s.added);
     else if (target && target !== 'none') boardFromMemory(target, s.added);
@@ -2374,7 +2373,6 @@ async function draftFromMemory(meetingId, added, opts) {
       if (found) {
         const rr = Engine.researchSave(Mem.data, found, new Date().toISOString());
         Mem.data = rr.memory; await saveMemory();
-        if (rr.added) track('researched', { n: rr.added });
       }
     } catch (_) { }
   }
@@ -2394,7 +2392,6 @@ async function draftFromMemory(meetingId, added, opts) {
   }
   if (prior && prior.gen && Engine.mergeRefresh) {
     const res = refreshBoard(prior, r, inputs, !!opts.auto);
-    track('board_refreshed', { kind: opts.auto ? 'auto' : 'asked', n: res.updated + res.added + res.removed });
     if (!open) return prior.id;
     closeToday();
     if (S.boardId !== prior.id) switchBoard(prior.id);
@@ -2406,7 +2403,6 @@ async function draftFromMemory(meetingId, added, opts) {
   b.gen = genOf(b, r, inputs, !!opts.auto);
   S.boards[b.id] = b;
   scheduleSave(b.id);
-  track(opts.auto ? 'board_drafted' : 'board_made', { kind: r.mode === 'model' ? 'model' : 'rules' });
   if (!open) return b.id;
   const cur = board();
   if (cur && cur.id !== b.id && !cur.example && !cur.elements.length) { delete S.boards[cur.id]; dirty.delete(cur.id); Store.remove(cur.id); }
@@ -2470,7 +2466,6 @@ async function setMeetingGoal(meetingId, text, open) {
   updateGoalBar(); queueToday();
   try {
     await saveMemory();
-    track('goal_set', { kind: t ? 'set' : 'cleared' });
     const bid = await boardFromMemory(meetingId, 0, { open: open !== false, goal: true });
     if (bid && open === false) toast(t ? 'Board shaped around your goal' : 'Board redrawn', { label: 'Open', fn: () => openFromToday(meetingId) });
   } finally {
@@ -2521,7 +2516,7 @@ function drawGoalBar() {
 // local server holds the Granola key; without that server (a published artifact) this is hidden.
 const GR = { status: null };
 const grHeaders = { headers: { 'x-cueboard': '1' } };
-const granolaOffered = () => !!(GR.status && GR.status.server && !GR.status.hosted);
+const granolaOffered = () => !!(GR.status && GR.status.server);
 async function granolaStatus() {
   if (GR.status) return GR.status;
   try {
@@ -2531,11 +2526,18 @@ async function granolaStatus() {
   queueToday();
   return GR.status;
 }
-// The hosted test counts what people do (never what's in it), to see whether they come back.
-// Only Cueboard's own server listens; a local one ignores it.
-function track(ev, extra) {
-  if (!GR.status || !GR.status.server) return;
-  try { fetch('/api/event', { method: 'POST', headers: { 'content-type': 'application/json', 'x-cueboard': '1' }, body: JSON.stringify(Object.assign({ ev }, extra)), keepalive: true }).catch(() => { }); } catch (_) { }
+// A Cueboard on a server sits behind a password (CUE_PASSWORD); then the menu offers signing out.
+const SERVER = { locked: false };
+async function sessionStatus() {
+  try {
+    const r = await fetch('/api/session', grHeaders);
+    if (r.ok) SERVER.locked = !!(await r.json()).locked;
+  } catch (_) { }
+}
+async function signOut() {
+  closeMenu();
+  try { await fetch('/api/session', { method: 'DELETE', headers: { 'x-cueboard': '1' } }); } catch (_) { }
+  location.reload();
 }
 const isoDay = t => { const d = new Date(t); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 
@@ -2682,7 +2684,6 @@ async function calendarBoot() {
   if (said) { q.delete('calendar'); history.replaceState(null, '', location.pathname + (q.toString() ? '?' + q : '') + location.hash); }
   const st = await calendarStatus();
   if (said === 'connected' && st && st.connected) {
-    track('calendar_connected');
     await (Mem.ready || (Mem.ready = loadMemory()));
     openToday();
     toast('Calendar connected. Drafting boards for today and tomorrow…');
@@ -2712,7 +2713,7 @@ function calendarCard() {
         h('li', {}, h('b', { text: 'Apple Calendar: ' }), 'share the calendar as a Public Calendar and copy its link.')),
       h('p', { class: 'td-muted', text: 'Anyone with the link can read your calendar, so Cueboard keeps it sealed in this browser and never logs it. You can reset it in your calendar’s settings at any time.' }));
     const google = st.configured ? h('button', { class: 'btn', type: 'button', onclick: () => location.assign('/oauth/google/start') }, ic('calendar'), 'Or sign in with Google') : null;
-    const setup = !st.configured && !st.hosted ? h('details', { class: 'td-setup' }, h('summary', { text: 'Or sign in with Google (set up on this machine)' }),
+    const setup = !st.configured ? h('details', { class: 'td-setup' }, h('summary', { text: 'Or sign in with Google (set up on this machine)' }),
       h('ol', { class: 'gr-setup' },
         h('li', {}, 'In Google Cloud, create an OAuth client (type: Web application) with this redirect address:', h('code', { text: `${location.origin}/oauth/google/callback` })),
         h('li', {}, 'Turn on the Google Calendar API, and add your Google account as a test user.'),
@@ -2749,7 +2750,6 @@ async function connectLink(url) {
     if (!r.ok || !b || !b.ok) { CAL.error = (b && b.error && b.error.message) || 'Couldn’t read that calendar.'; return; }
     CAL.draft = ''; CAL.status = Object.assign({}, CAL.status, { connected: true, via: 'link' });
     if (b.email) CAL.email = b.email;
-    track('calendar_connected', { kind: 'link' });
     toast('Calendar connected. Drafting boards for today and tomorrow…');
   } catch (_) { CAL.error = 'Couldn’t reach Cueboard’s server.'; }
   finally { CAL.busy = false; queueToday(); }
@@ -2923,7 +2923,6 @@ function openToday() {
   if (S.glance) exitGlance();
   TD.open = true; todayEl.hidden = false; app.classList.add('today-open');
   renderToday();
-  track('today_opened');
   clearInterval(TD.iv); TD.iv = setInterval(renderToday, 60000);
 }
 function closeToday() {
@@ -3144,7 +3143,6 @@ async function toggleFloat() {
   w.addEventListener('pagehide', () => { if (FL.win === w) Object.assign(FL, { win: null, doc: null, ui: null, dock: null }); updateFloatBtn(); });
   w.addEventListener('resize', () => { if (floatOpen() && !FL.strip && Math.abs(w.innerWidth - FL.w) > 8) queueFloat(); });
   updateFloatBtn();
-  track('float_opened', { kind: dock ? 'dock' : pip ? 'pip' : 'popup' });
   if (dock) toast('This browser won’t open a floating window, so it’s docked here. In Chrome or Edge it floats over your meeting.');
   else if (!pip) toast('In this browser the window won’t stay on top. In Chrome or Edge it floats over your meeting.');
 }
@@ -3419,7 +3417,7 @@ function localSample() {
     const body = await res.json().catch(() => null);
     if (!res.ok || !body || body.error) {
       const c = body && body.error && body.error.code;
-      // The hosted version's own refusals (the daily limit, an expired invite) say what to do.
+      // The server's own refusals (signed out, a model that's busy) say what to do.
       throw Object.assign(new Error((body && body.error && body.error.message) || 'No answer'), { code: c === 'refusal' ? 'refused' : c === 'rate_limited' ? 'rate_limited' : 'unavailable', plain: res.status === 429 || res.status === 401 });
     }
     if (opts.onText) opts.onText({ text: body.text, delta: body.text });
@@ -4328,7 +4326,8 @@ async function boot() {
   // who has started looking around; then refit once fonts settle, unless they've moved the view.
   const saved = await Store.ready;
   Mem.ready = Mem.ready || loadMemory();
-  granolaStatus().then(() => track('app_opened'));
+  granolaStatus();
+  sessionStatus();
   calendarBoot();
   demoStatus();
   Mem.ready.then(m => {

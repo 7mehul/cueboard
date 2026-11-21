@@ -12,7 +12,7 @@ import { LLMError, schemaInstructions, validate } from '../llm.ts';
 
 export function claude(opts: { model?: string; client?: Anthropic } = {}): LLM {
   const client = opts.client ?? new Anthropic();
-  const model = opts.model ?? process.env.CUE_MODEL ?? 'claude-opus-5-5';
+  const model = opts.model ?? (process.env.CUE_MODEL || 'claude-opus-5-5');
   let fallbacks = true;
   const loose = new Set<string>();
   const system = (req: JsonRequest<unknown>) => [{ type: 'text' as const, text: req.system, cache_control: { type: 'ephemeral' as const } }];

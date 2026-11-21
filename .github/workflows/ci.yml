@@ -24,3 +24,19 @@ jobs:
         run: node scripts/scale.ts --n 20000 --edge 0.3 --fuzz-model
       - name: The app builds
         run: node scripts/build-app.ts
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: The image builds
+        run: docker build -t cueboard .
+      - name: It won't start open to the network without a password
+        run: "! docker run --rm cueboard"
+      - name: With one, it starts, answers its health check, and asks for the password
+        run: |
+          docker run -d --name cueboard -e CUE_PASSWORD=ci-only-password-0123 -p 127.0.0.1:5180:5180 cueboard
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:5180/healthz && break; sleep 1; done
+          docker logs cueboard
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'x-cueboard: 1' http://127.0.0.1:5180/api/llm)" = 401
+          curl -s http://127.0.0.1:5180/ | grep -q 'type="password"'

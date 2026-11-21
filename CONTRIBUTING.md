@@ -6,7 +6,7 @@ Thanks for looking. Issues and pull requests are welcome.
 
 ```bash
 npm install
-node scripts/serve.ts 5190 --demo --fake-model   # the demo week, no key needed
+npm run demo                                     # the demo week at localhost:5190, no key needed
 npm test                                         # all tests
 npm run typecheck
 ```

@@ -12,12 +12,15 @@ It works from what you already have: your calendar, your notes from past calls (
 imported from Granola), emails and invites. It remembers people, not transcripts, so the second
 meeting with someone knows where the first one left off.
 
+It runs on your own computer or your own server, with your own Claude key. There's no Cueboard
+cloud and no account: boards and memory live in your browser ([self-hosting](#self-hosting)).
+
 ## Try it in two minutes, no key needed
 
 ```bash
 git clone https://github.com/7mehul/cueboard.git && cd cueboard
 npm install
-node scripts/serve.ts 5190 --demo --fake-model
+npm run demo
 ```
 
 Open http://localhost:5190, choose **Load the demo week** in the boards menu, and open a board.
@@ -30,15 +33,16 @@ Needs Node 26 or later.
 ## Use it with Claude
 
 Sign in once with the [ant CLI](https://platform.claude.com/docs/en/cli-sdks-libraries/cli/quickstart),
-or set `ANTHROPIC_API_KEY`, then start the server without `--fake-model`:
+or put `ANTHROPIC_API_KEY` in a `.env` file (copy [`.env.example`](.env.example), which lists every
+setting), then start it:
 
 ```bash
 ant auth login
-node scripts/serve.ts            # http://localhost:5180
+npm start                        # http://localhost:5180
 ```
 
-The key or sign-in stays in the server; the page never sees it. Every setting is listed in
-[`.env.example`](.env.example).
+The key or sign-in stays in the server; the page never sees it. To open Cueboard from your phone
+or another computer, run it on a server: see [Self-hosting](#self-hosting).
 
 ## Where the context comes from
 
@@ -254,7 +258,7 @@ node scripts/eval-extract.ts --verbose     # a real model reads the six sample d
 ## Run it
 
 ```bash
-npm test                                   # 133 tests: behaviour, the plan, calendar links and invites, research, the checker catching each broken rule, the judgment layer, memory, Today, Granola, calendar, refresh, the demo week, the hosted gate
+npm test                                   # 160 tests: behaviour, the plan, calendar links and invites, research, the checker catching each broken rule, the judgment layer, memory, Today, Granola, calendar, refresh, the demo week, the server and its password
 node scripts/show.ts followup              # print a board as text (first | followup | seed:<n>)
 node scripts/scale.ts --n 1000000          # generate, build and check a million boards
 node scripts/scale.ts --n 200000 --edge 0.5   # same, with planted problems in half the packets
@@ -349,57 +353,74 @@ Setting up Google sign-in (once, in Google Cloud):
 
 1. Create a project, and enable the **Google Calendar API**.
 2. Google Auth Platform: app name Cueboard, audience **External**, data access
-   `calendar.events.readonly`, and add each tester's Google account under **Test users** (up to 100).
+   `calendar.events.readonly`, and add the Google accounts that will use it under **Test users**
+   (up to 100).
 3. Clients → create a **Web application** client with these redirect addresses:
-   `http://localhost:5180/oauth/google/callback` and, for the hosted version,
-   `https://<your app>.onrender.com/oauth/google/callback`.
-4. Start Cueboard with `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` set (in Render, in its
-   environment settings). Open it at `localhost:5180`, not `127.0.0.1`, so the address matches.
+   `http://localhost:5180/oauth/google/callback` and, on your own server,
+   `https://<your domain>/oauth/google/callback`.
+4. Put `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in `.env` and start Cueboard again. On your
+   computer, open it at `localhost:5180`, not `127.0.0.1`, so the address matches.
 
 While the Google app is in testing, Google ends each person's access after 7 days; Today then asks
-them to connect again. Publishing the app removes that; calendar access is a "sensitive" scope, so
+to connect again. Publishing the app removes that; calendar access is a "sensitive" scope, so
 Google reviews it (a privacy policy and a homepage are needed), but no paid security assessment.
 
 `--fake-calendar` serves a sample week (`scenarios/calendar.ts`) and connects without Google.
 
-## Hosted test version
+## Self-hosting
 
-`node scripts/serve.ts --hosted` is the same app on the internet for a handful of testers, with
-your Anthropic key on the server. On top of the local version it adds:
+Cueboard is one small Node server and a page. There's no database: boards and memory live in your
+browser, and the server holds your keys and passes model calls on. Run it wherever suits you.
 
-- **Invite codes.** Everything is behind `/join`. A tester opens their link
-  (`https://<host>/join#<code>`; the code after `#` never reaches the server's logs) and gets a
-  signed session cookie for 60 days. Taking their `name:code` out of `CUE_INVITES` ends their access.
-- **A daily allowance.** Model calls per tester per day (`CUE_DAILY_CALLS`, 150) and for everyone
-  (`CUE_DAILY_TOTAL`, 1000), reset at midnight UTC. Past it, boards still open and Float works;
-  new reads say why they stopped.
-- **A usage log of actions, never content:** app opened, Today opened, board made, board opened,
-  Float opened, memory saved, and each model call with its tokens. It goes to stdout and, with
-  `CUE_DATA_DIR`, to `usage.jsonl` there. `/admin` (for names in `CUE_ADMINS`) shows one row per
-  tester, including whether they made a second board within 14 days of their first.
-- **No Granola.** The server's Granola key would hand one person's notes to every tester.
-
-Testers' boards and memory stay in their own browser; the join page tells them so, and that what
-they paste goes to Anthropic's Claude.
-
-Try it on this machine with the fake model and the public sample settings in `deploy/local.env`
-(which only work from this machine), then open `/join` with the tester code from that file:
+**On your own computer.** The simplest, and nothing to secure: it only answers this machine.
 
 ```bash
-node --env-file=deploy/local.env scripts/serve.ts 5183 --hosted --fake-model
+git clone https://github.com/7mehul/cueboard.git && cd cueboard
+npm install
+cp .env.example .env             # add ANTHROPIC_API_KEY, or run `ant auth login` instead
+npm start                        # http://localhost:5180
 ```
 
-Deploy on Render (`render.yaml`, `Dockerfile`): push the repo, then in Render choose New →
-Blueprint and pick it. Render generates `CUE_SECRET` and asks for `ANTHROPIC_API_KEY`,
-`CUE_INVITES` and `CUE_ADMINS`. Make invites in your own terminal; it prints the value to set and
-one link per person:
+**On a server** (a VPS, a home server, anything that runs Docker), to open it from your phone or
+another computer:
 
 ```bash
-node scripts/invite.ts maya ben priya --url https://your-app.onrender.com
+git clone https://github.com/7mehul/cueboard.git && cd cueboard
+cp .env.example .env             # set CUE_PASSWORD and ANTHROPIC_API_KEY
+docker compose up -d             # answers on 127.0.0.1:5180
 ```
 
-Adding someone later: `node scripts/invite.ts sam --add "<current CUE_INVITES>"`, set the new value,
-and Render restarts with it.
+Then put HTTPS in front of it. With [Caddy](https://caddyserver.com), which gets the certificate
+by itself, the whole `Caddyfile` is:
+
+```
+cueboard.example.com {
+	reverse_proxy localhost:5180
+}
+```
+
+Any other proxy works if it passes the `Host` header and sets `X-Forwarded-Proto`. Or skip the
+domain and reach it over an SSH tunnel (`ssh -L 5180:localhost:5180 you@your-server`) or a private
+network such as Tailscale. Without Docker it's the same on any machine with Node 26: `npm install`,
+then `npm start` with `CUE_PASSWORD` in `.env`, behind the same proxy.
+
+What to know:
+
+- **One password.** With `CUE_PASSWORD` set, every page and call needs it, once per browser (a
+  cookie for 30 days; **Sign out** is in the boards menu). Ten wrong tries from one address in ten
+  minutes and it waits. A new password signs every browser out. Cueboard won't listen beyond its
+  own machine (`CUE_HOST=0.0.0.0`, as the Docker image does) without one.
+- **Your keys stay on the server**, and the page never sees them. Whoever has the password uses your
+  Anthropic key and your Granola notes, so share it only with people you'd lend those to.
+- **Boards and memory stay in each browser**, not on the server. A second device starts empty, and
+  clearing a browser's site data erases them.
+- **The data volume holds one file**, `local.key`, which seals sign-ins and calendar connections.
+  Lose it and you sign in and connect your calendar again; nothing else is lost.
+- **Calendar links need nothing more.** Google sign-in needs your domain's redirect address on your
+  Google client ([setup](#calendar-boards-without-asking)).
+- **Updating:** `git pull && docker compose up -d --build`.
+- **If you change Cueboard and let other people use your server,** the AGPL asks you to offer them
+  your source. The boards menu links to it: point `SOURCE_URL` in `app/board.js` at your fork.
 
 ## Files
 
@@ -430,15 +451,14 @@ and Render restarts with it.
 | `scripts/calendar-link.ts` | Reading a calendar's private link safely: public https addresses only, size and redirect limits |
 | `src/memory/ics.ts` | A calendar feed or invite file into events, repeats expanded within the window |
 | `src/memory/research.ts` | Who to look up before a meeting, the search prompt, and the checks on what comes back |
-| `src/intel/providers/server.ts` | The page's model through the local server (`scripts/serve.ts`) |
+| `src/intel/providers/server.ts` | The page's model through Cueboard's server (`scripts/serve.ts`) |
 | `src/export.ts` | Converts an engine board into canvas items, keeping memory and gap markers |
 | `app/board.js`, `app/board.css`, `app/index.html` | The freeform canvas (from the prototype, extended) |
 | `app/float.css` | The floating in-call window (its code is the float section of `board.js`) |
 | `app/engine-entry.ts` | What the canvas gets from the engine: sample meetings and `boardFor()` |
-| `scripts/serve.ts` | The local server, and with `--hosted` the test version on the internet |
-| `scripts/gate.ts`, `scripts/hosted-pages.ts` | The hosted version's invites, sessions, allowance and usage log; its invite and usage pages |
-| `scripts/invite.ts` | Makes invite codes and links for testers |
-| `Dockerfile`, `render.yaml`, `deploy/local.env` | Running the hosted version on Render, and trying it locally |
+| `scripts/serve.ts` | The server: the app, model calls, Granola, the calendar, and the password when there is one |
+| `scripts/auth.ts` | The password: sessions, the limit on guesses, the sign-in page |
+| `Dockerfile`, `compose.yaml` | Running it on your own server |
 | `synth/` | Seeded synthetic packet generator that plants realistic problems |
 | `test/fixtures.ts` | The Dana Ruiz first meeting and follow-up |
 | `.env.example` | Every setting the server reads, with no values |
