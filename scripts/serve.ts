@@ -1,4 +1,5 @@
-// Cueboard's server: it serves the app, rebuilds it when its sources change, and runs model steps
+// The Cueboard app on your computer (what `npm start` and `npx cueboard` run): it serves the page,
+// rebuilds it when its sources change in a clone, and runs model steps
 // for the page with the credentials in its own environment, so no key ever reaches the browser.
 // Usage: node scripts/serve.ts [port] [--demo] [--fake-model] [--fake-granola] [--fake-calendar] [--no-watch]
 //   With ANTHROPIC_API_KEY (or an `ant auth login` sign-in) the page gets Claude (CUE_MODEL to pick).
@@ -9,12 +10,13 @@
 //   --demo serves a whole founder's week to explore (scenarios/demo.ts): its calendar, its Granola
 //   notes, and memory to start from, which the page offers to load. Add --fake-model to play it
 //   without a key; with ANTHROPIC_API_KEY set, Claude reads it.
-// Self-hosting (README "Self-hosting"): by default it answers this machine only, with no password.
+// On a server (README "Optional: run it on a server"): by default it answers this machine only, with no password.
 // With CUE_PASSWORD set, every page and call needs that password once per browser, and CUE_HOST
 // can open it to other machines (0.0.0.0; the Docker image does this). PORT picks the port, and
 // CUE_DATA_DIR where the key that seals sign-ins and calendar access is kept (./data by default).
 import { createServer } from 'node:http';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
@@ -90,9 +92,11 @@ const seal = sealer(key);
 const sessionSecret = 'cueboard/session/' + key;
 
 const build = fileURLToPath(new URL('./build-app.ts', import.meta.url));
-// While you work on it, it rebuilds on every change. On a server (a password, NODE_ENV=production,
-// or --no-watch) it builds once.
-if (locked || process.env.NODE_ENV === 'production' || args.includes('--no-watch')) { if (spawnSync(process.execPath, [build], { stdio: 'inherit' }).status !== 0) fail('the app didn’t build'); }
+// Installed from npm (`npx cueboard`), the app comes built and its sources aren't there. In a
+// clone it rebuilds on every change while you work on it; on a server (a password,
+// NODE_ENV=production, or --no-watch) it builds once.
+if (!existsSync(build)) { if (!existsSync(new URL('cueboard.html', dist))) fail('this copy of Cueboard is missing its app. Install it again.'); }
+else if (locked || process.env.NODE_ENV === 'production' || args.includes('--no-watch')) { if (spawnSync(process.execPath, [build], { stdio: 'inherit' }).status !== 0) fail('the app didn’t build'); }
 else spawn(process.execPath, [build, '--watch'], { stdio: 'inherit' });
 
 const send = (res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}) => {
@@ -384,7 +388,7 @@ async function door(req: IncomingMessage, res: ServerResponse, path: string): Pr
     }
     if (!https(req) && !/^(127\.|::1$|::ffff:127\.)/.test(req.socket.remoteAddress ?? '') && !warnedHttp) {
       warnedHttp = true;
-      console.warn('signed in over plain http from another machine: put Cueboard behind HTTPS (README "Self-hosting")');
+      console.warn('signed in over plain http from another machine: put Cueboard behind HTTPS (README "Optional: run it on a server")');
     }
     console.log('signed in');
     send(res, 200, { ok: true }, { 'set-cookie': `${SESSION}=${sessionToken(sessionSecret, password)}; ${cookieFlags(req, SESSION_DAYS * 86400)}` });
@@ -409,7 +413,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   // Without a password, only this machine's own names. Reached by any other (a proxy, a rebinding
   // page), it says what to do instead of half-working.
   if (!hostOk(req)) {
-    res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' }).end(`This Cueboard only answers at http://localhost:${port}. To open it from anywhere else, set CUE_PASSWORD (see README, Self-hosting).`);
+    res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' }).end(`This Cueboard only answers at http://localhost:${port}. To open it from anywhere else, set CUE_PASSWORD (README, "Optional: run it on a server").`);
     return;
   }
   if (locked && !await door(req, res, path)) return;

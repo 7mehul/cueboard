@@ -3,7 +3,6 @@
   "version": "0.1.0",
   "description": "Meeting prep boards: say what a meeting is for, get a visual plan of how it should run and what you need in it.",
   "license": "AGPL-3.0-only",
-  "private": true,
   "type": "module",
   "repository": {
     "type": "git",
@@ -13,25 +12,40 @@
   "bugs": {
     "url": "https://github.com/7mehul/cueboard/issues"
   },
+  "keywords": [
+    "meetings",
+    "meeting-prep",
+    "claude",
+    "self-hosted",
+    "local-first",
+    "whiteboard"
+  ],
   "engines": {
-    "node": ">=26"
+    "node": ">=22"
   },
+  "bin": {
+    "cueboard": "dist/cli.mjs"
+  },
+  "files": [
+    "dist/cli.mjs",
+    "dist/server.mjs",
+    "dist/cueboard.html"
+  ],
   "scripts": {
     "start": "node --env-file-if-exists=.env scripts/serve.ts",
     "demo": "node scripts/serve.ts 5190 --demo --fake-model",
     "test": "node --test \"test/**/*.test.ts\"",
     "typecheck": "tsc --noEmit",
+    "prepack": "node scripts/build-package.ts",
     "scale": "node scripts/scale.ts",
     "gallery": "node scripts/gallery.ts"
   },
   "devDependencies": {
+    "@anthropic-ai/sdk": "^0.136.0",
     "@types/node": "^26.6.5",
     "esbuild": "^0.28.2",
-    "typescript": "^7.0.2"
-  },
-  "dependencies": {
-    "@anthropic-ai/sdk": "^0.136.0",
     "ical.js": "^2.2.1",
+    "typescript": "^7.0.2",
     "zod": "^4.6.7"
   }
 }

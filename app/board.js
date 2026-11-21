@@ -2577,7 +2577,7 @@ async function granolaPick() {
       if (!b.hasMore || !b.cursor) break;
       cursor = b.cursor;
     }
-  } catch (_) { error = 'Couldn’t reach Cueboard’s server.'; }
+  } catch (_) { error = 'Couldn’t reach Cueboard. Check it’s still running.'; }
   R.busy = false;
   if (error && !notes.length) { sheetFrame('Bring in your Granola notes', null, [h('p', { class: 'sh-err', text: error })], [h('button', { class: 'btn', type: 'button', onclick: closeSheet }, 'Close')]); return; }
   notes.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
@@ -2751,7 +2751,7 @@ async function connectLink(url) {
     CAL.draft = ''; CAL.status = Object.assign({}, CAL.status, { connected: true, via: 'link' });
     if (b.email) CAL.email = b.email;
     toast('Calendar connected. Drafting boards for today and tomorrow…');
-  } catch (_) { CAL.error = 'Couldn’t reach Cueboard’s server.'; }
+  } catch (_) { CAL.error = 'Couldn’t reach Cueboard. Check it’s still running.'; }
   finally { CAL.busy = false; queueToday(); }
   if (CAL.status && CAL.status.connected) await syncCalendar(true);
 }

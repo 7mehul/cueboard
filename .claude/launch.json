@@ -46,6 +46,18 @@
         "--fake-model"
       ],
       "port": 5190
+    },
+    {
+      "name": "cueboard-package",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "CUE_DATA_DIR=data/package",
+        "node",
+        "dist/cli.mjs",
+        "demo",
+        "5194"
+      ],
+      "port": 5194
     }
   ]
 }

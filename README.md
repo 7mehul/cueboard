@@ -12,50 +12,70 @@ It works from what you already have: your calendar, your notes from past calls (
 imported from Granola), emails and invites. It remembers people, not transcripts, so the second
 meeting with someone knows where the first one left off.
 
-It runs on your own computer or your own server, with your own Claude key. There's no Cueboard
-cloud and no account: boards and memory live in your browser ([self-hosting](#self-hosting)).
+It runs on your own computer, with your own Claude key. There's no Cueboard cloud and no
+account: your boards and memory stay in your browser.
+
+It's early. Everything below is built and tested, but some of it has only met sample data and a
+stand-in model, not the real service yet: [what's been tried for real](#whats-been-tried-for-real).
 
 ## Try it in two minutes, no key needed
 
 ```bash
-git clone https://github.com/7mehul/cueboard.git && cd cueboard
-npm install
-npm run demo
+npx cueboard demo
 ```
 
 Open http://localhost:5190, choose **Load the demo week** in the boards menu, and open a board.
 A founder's week is loaded: a renewal at risk, an investor partner meeting, a first sales call.
 Type a goal in the bar at the top ("find out why seats are falling") and the board redraws
-around it. `--fake-model` is a stand-in that only knows the demo's documents.
+around it. The demo uses a stand-in for Claude that only knows the demo's documents.
 
-Needs Node 26 or later.
+Needs [Node.js](https://nodejs.org) 22 or later.
 
 ## Use it with Claude
 
-Sign in once with the [ant CLI](https://platform.claude.com/docs/en/cli-sdks-libraries/cli/quickstart),
-or put `ANTHROPIC_API_KEY` in a `.env` file (copy [`.env.example`](.env.example), which lists every
-setting), then start it:
+Sign in once with the [ant CLI](https://platform.claude.com/docs/en/cli-sdks-libraries/cli/quickstart)
+(or set `ANTHROPIC_API_KEY`), then start Cueboard:
 
 ```bash
 ant auth login
-npm start                        # http://localhost:5180
+npx cueboard                     # http://localhost:5180
 ```
 
-The key or sign-in stays in the server; the page never sees it. To open Cueboard from your phone
-or another computer, run it on a server: see [Self-hosting](#self-hosting).
+It all runs on your computer, in two parts: the board is a page in your browser, and the terminal
+window running `cueboard` holds your keys and makes the calls to Claude, Granola and your calendar,
+so the page never sees a key. It runs while that window is open; Ctrl+C stops it, and your boards
+stay in the browser.
+
+Other settings (Granola, Google Calendar, which model) go in `~/.cueboard/.env`;
+[`.env.example`](.env.example) lists them all. To open Cueboard from your phone as well, see
+[Optional: run it on a server](#optional-run-it-on-a-server).
+
+**From the code**, to change it (needs Node 26):
+
+```bash
+git clone https://github.com/7mehul/cueboard.git && cd cueboard
+npm install
+npm run demo                     # the demo week, http://localhost:5190
+npm start                        # with Claude, http://localhost:5180 (settings in .env here)
+```
+
+It rebuilds the page as you edit; [CONTRIBUTING.md](CONTRIBUTING.md) has the rest.
 
 ## Where the context comes from
 
 | Source | Status | What you need |
 | --- | --- | --- |
-| Your calendar, by its private link | Works, read-only | The link from Google, Outlook or Apple Calendar ([where to find it](#calendar-boards-without-asking)) |
-| Google Calendar, by signing in | Works, read-only | Your own Google Cloud OAuth client ([setup](#calendar-boards-without-asking)) |
-| Invite files (.ics) | Works | Drop or paste one on Today |
-| Research on the people you meet | Works | Claude (it uses Claude's web search). On by default; switch it off on Today |
-| Paste: invites, email threads, notes, transcripts | Works | Nothing. Paste several at once, or drop text files; each piece is sorted and dated |
-| Granola notes | Works | A Granola Business plan API key |
+| Your calendar, by its private link | Works, read-only. Tried with a real Google feed; Outlook and Apple links not yet | The link from Google, Outlook or Apple Calendar ([where to find it](#calendar-boards-without-asking)) |
+| Google Calendar, by signing in | Built, read-only. Not yet tried with a real Google account | Your own Google Cloud OAuth client ([setup](#calendar-boards-without-asking)) |
+| Invite files (.ics) | Built. Tried with sample invites only | Drop or paste one on Today |
+| Research on the people you meet | Built. Not yet tried with real Claude | Claude (it uses Claude's web search). On by default; switch it off on Today |
+| Paste: invites, email threads, notes, transcripts | Built. The current version not yet tried with real Claude | Claude, to read them. Paste several at once, or drop text files; each piece is sorted and dated |
+| Granola notes | Built. Not yet tried with a real Granola account | A Granola Business plan API key |
 | Your profile and goals | Works | Fill in "About you" once |
 | Other notetakers (Fireflies, Fathom), Gmail, CRMs | Planned | |
+
+"Built" means tested here with sample data or the stand-in model. If you try one for real, an
+issue saying whether it worked helps.
 
 ## How it's built
 
@@ -240,16 +260,14 @@ paste ─▶ read (model) ─▶ check (code) ─▶ review (you) ─▶ memory 
   Granola's summary (labelled as written by Granola's AI, so quotes come from your notes or the
   transcript where possible), then the transcript with you as "Me". Every record keeps a link back
   to the note in Granola, shown in Float's sources. It needs a Granola API key (Business plan:
-  Settings → Connectors → API keys) set as `GRANOLA_API_KEY` where the server runs; the key stays
-  in the server. `--fake-granola` serves two sample notes from `scenarios/granola.ts`.
-- The Assistant panel works the same way: in Claude it uses the viewer's Claude; locally, the
-  server's model.
-- Reading needs a model. Locally, run `node scripts/serve.ts` in a terminal where
-  `ANTHROPIC_API_KEY` is set: the server makes the model calls, so the key never reaches the page,
-  and it only answers the page it serves. In a published artifact, the viewer's own Claude is used.
-  `node scripts/serve.ts --fake-model` answers for the sample documents in `scenarios/docs.ts`
-  only, for trying the flow without a key.
-- Memory is saved in the browser (or the artifact's storage), one per user.
+  Settings → Connectors → API keys) set as `GRANOLA_API_KEY` in Cueboard's settings; the key stays
+  in the Cueboard app on your computer, never in the page. `--fake-granola` serves two sample notes from `scenarios/granola.ts`; it hasn't
+been tried against a real Granola account yet.
+- Reading needs Claude, and so does the Assistant panel. The Cueboard app on your computer makes
+  the calls, so the key never reaches the page, and it only answers the page it serves.
+  `--fake-model` (which `npx cueboard demo` uses) answers for the sample documents in
+  `scenarios/docs.ts` and the demo week only, for trying the flow without a key.
+- Memory is saved in the browser, one per person.
 
 ```bash
 node scripts/eval-extract.ts --verbose     # a real model reads the six sample documents; scored, then the follow-up board
@@ -307,9 +325,10 @@ finding only if:
 
 Nothing about anyone's private life is asked for. Each person and company is looked up once a month
 at most; a failed search is tried again the next day. Their names and companies go to Claude's web
-search, which is why it can be switched off on Today. It needs a model that can search: the local
-server's Claude, not the stand-in. `--demo --fake-model` scripts a search for the Northwind call,
-with one claim whose page the search never returned, so the check that drops it can be seen.
+search, which is why it can be switched off on Today. It needs a model that can search: Claude,
+not the stand-in. `--demo --fake-model` scripts a search for the Northwind call,
+with one claim whose page the search never returned, so the check that drops it can be seen. So
+far it has only run against that script, not real Claude's web search.
 
 ## Calendar: boards without asking
 
@@ -318,8 +337,8 @@ while it's open, and when you come back to the tab. There are two ways in:
 
 - **Its private link**, from any calendar app. Google Calendar: Settings, your calendar, Integrate
   calendar, "Secret address in iCal format". Outlook: Settings, Calendar, Shared calendars, Publish
-  a calendar with "Can view all details". Apple Calendar: share it as a Public Calendar. No setup
-  on the server. The link is sealed into a cookie and never logged; the server only fetches public
+  a calendar with "Can view all details". Apple Calendar: share it as a Public Calendar. Nothing
+  else to set up. The link is sealed into a cookie and never logged; Cueboard only fetches public
   https addresses (`scripts/calendar-link.ts`), and repeating meetings, moved occurrences and time
   zones come from the file itself (`src/memory/ics.ts`, using Mozilla's ical.js). Tested with
   Google's format; Outlook's and Apple's links should work the same way but haven't been tried yet.
@@ -345,11 +364,12 @@ anything. Then:
   under you; it offers the update.
 - **Past meetings count.** A meeting the calendar says happened, with no notes in memory, makes the
   next board a follow-up that says so ("No notes from it yet"), and Today asks for those notes.
-- The Google grant or the link is sealed into a cookie only this server can read, so the server
-  keeps no one's calendar access. Disconnecting removes it (and revokes a Google grant); meetings
+- The Google grant or the link is sealed into a cookie only your copy of Cueboard can read, so
+  Cueboard itself keeps no one's calendar access. Disconnecting removes it (and revokes a Google grant); meetings
   already read stay in memory.
 
-Setting up Google sign-in (once, in Google Cloud):
+Setting up Google sign-in (once, in Google Cloud). It has only run against `--fake-calendar` so
+far, not a real Google account:
 
 1. Create a project, and enable the **Google Calendar API**.
 2. Google Auth Platform: app name Cueboard, audience **External**, data access
@@ -358,7 +378,8 @@ Setting up Google sign-in (once, in Google Cloud):
 3. Clients → create a **Web application** client with these redirect addresses:
    `http://localhost:5180/oauth/google/callback` and, on your own server,
    `https://<your domain>/oauth/google/callback`.
-4. Put `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in `.env` and start Cueboard again. On your
+4. Put `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in Cueboard's settings (`~/.cueboard/.env`,
+   or `.env` in a clone) and start Cueboard again. On your
    computer, open it at `localhost:5180`, not `127.0.0.1`, so the address matches.
 
 While the Google app is in testing, Google ends each person's access after 7 days; Today then asks
@@ -367,28 +388,24 @@ Google reviews it (a privacy policy and a homepage are needed), but no paid secu
 
 `--fake-calendar` serves a sample week (`scenarios/calendar.ts`) and connects without Google.
 
-## Self-hosting
+## Optional: run it on a server
 
-Cueboard is one small Node server and a page. There's no database: boards and memory live in your
-browser, and the server holds your keys and passes model calls on. Run it wherever suits you.
+Most people never need this: on your own computer, Cueboard only answers that computer and has
+nothing to secure. Run it on a server (a VPS, a home server, anything that runs Docker) only if you
+want it always on and reachable from your phone or another computer, behind a password.
 
-**On your own computer.** The simplest, and nothing to secure: it only answers this machine.
-
-```bash
-git clone https://github.com/7mehul/cueboard.git && cd cueboard
-npm install
-cp .env.example .env             # add ANTHROPIC_API_KEY, or run `ant auth login` instead
-npm start                        # http://localhost:5180
-```
-
-**On a server** (a VPS, a home server, anything that runs Docker), to open it from your phone or
-another computer:
+Each release is published as an image for Intel/AMD and ARM machines (`ghcr.io/7mehul/cueboard`),
+so the server needs only two files, not the code:
 
 ```bash
-git clone https://github.com/7mehul/cueboard.git && cd cueboard
-cp .env.example .env             # set CUE_PASSWORD and ANTHROPIC_API_KEY
+mkdir cueboard && cd cueboard
+curl -fsSLO https://raw.githubusercontent.com/7mehul/cueboard/main/compose.yaml
+curl -fsSL https://raw.githubusercontent.com/7mehul/cueboard/main/.env.example -o .env
+nano .env                        # set CUE_PASSWORD and ANTHROPIC_API_KEY
 docker compose up -d             # answers on 127.0.0.1:5180
 ```
+
+To run code you've changed, do the same in a clone of the repo with `docker compose up -d --build`.
 
 Then put HTTPS in front of it. With [Caddy](https://caddyserver.com), which gets the certificate
 by itself, the whole `Caddyfile` is:
@@ -401,8 +418,8 @@ cueboard.example.com {
 
 Any other proxy works if it passes the `Host` header and sets `X-Forwarded-Proto`. Or skip the
 domain and reach it over an SSH tunnel (`ssh -L 5180:localhost:5180 you@your-server`) or a private
-network such as Tailscale. Without Docker it's the same on any machine with Node 26: `npm install`,
-then `npm start` with `CUE_PASSWORD` in `.env`, behind the same proxy.
+network such as Tailscale. Without Docker it's the same on any machine with Node: put
+`CUE_PASSWORD` in `~/.cueboard/.env`, run `npx cueboard`, and put the same proxy in front.
 
 What to know:
 
@@ -418,7 +435,9 @@ What to know:
   Lose it and you sign in and connect your calendar again; nothing else is lost.
 - **Calendar links need nothing more.** Google sign-in needs your domain's redirect address on your
   Google client ([setup](#calendar-boards-without-asking)).
-- **Updating:** `git pull && docker compose up -d --build`.
+- **Updating:** `docker compose pull && docker compose up -d`. To stay on one release, set
+  `CUEBOARD_VERSION` (say `0.1.0`) in `.env`; [releases](https://github.com/7mehul/cueboard/releases)
+  say what changed. From a clone: `git pull && docker compose up -d --build`.
 - **If you change Cueboard and let other people use your server,** the AGPL asks you to offer them
   your source. The boards menu links to it: point `SOURCE_URL` in `app/board.js` at your fork.
 
@@ -456,12 +475,16 @@ What to know:
 | `app/board.js`, `app/board.css`, `app/index.html` | The freeform canvas (from the prototype, extended) |
 | `app/float.css` | The floating in-call window (its code is the float section of `board.js`) |
 | `app/engine-entry.ts` | What the canvas gets from the engine: sample meetings and `boardFor()` |
-| `scripts/serve.ts` | The server: the app, model calls, Granola, the calendar, and the password when there is one |
+| `scripts/serve.ts` | The local app (what `npm start` and `npx cueboard` run): the page, model calls, Granola, the calendar, and the password when there is one |
+| `scripts/cli.ts` | The `cueboard` command: `demo`, a port, settings and its key file in `~/.cueboard` |
+| `scripts/build-package.ts`, `scripts/check-package.sh` | The npm package: the local app bundled into one file with nothing to install, and a check that runs it from a fresh install |
 | `scripts/auth.ts` | The password: sessions, the limit on guesses, the sign-in page |
 | `Dockerfile`, `compose.yaml` | Running it on your own server |
+| `scripts/check-image.sh` | Checks a built image: not root, won't start without a password, asks for it |
+| `.github/workflows/release.yml` | A version tag publishes the image and writes the release |
 | `synth/` | Seeded synthetic packet generator that plants realistic problems |
 | `test/fixtures.ts` | The Dana Ruiz first meeting and follow-up |
-| `.env.example` | Every setting the server reads, with no values |
+| `.env.example` | Every setting Cueboard reads, with no values |
 
 ## Rules the checker enforces
 
@@ -475,6 +498,32 @@ What to know:
 - "Up" and "down" match what the numbers did
 - Line charts need 3–12 points, bars 2–6, timelines 2–6 past events and follow-ups only
 - Within the block budget; no overlapping cards; the rail lists every block once
+
+## What's been tried for real
+
+Tried:
+
+- Boards drafted by Claude (`claude-opus-5-5`): all six scenarios passed, before the board became
+  a plan. The Assistant panel, through an `ant` sign-in.
+- A real Google Calendar feed, by its link.
+- `npx cueboard`: packed, installed in a fresh folder and run there with no key and an empty home
+  folder, on every push (`scripts/check-package.sh`); the demo week drafting its boards in a browser.
+- The Docker image, built and checked on every push (`scripts/check-image.sh`, Intel/AMD).
+- 160 tests, and the checker over a million generated boards.
+
+Not yet tried:
+
+- **Plans drafted by real Claude.** The goal-first board (parts with their minutes, cards under
+  each) has only run with the stand-in model.
+- **Reading pastes with real Claude.** The last real run failed: the answer format was too big for
+  Claude's structured output. It has been cut down since, but not run again
+  (`node scripts/eval-extract.ts` is the check).
+- **Research** with Claude's real web search.
+- **Google sign-in** with a real Google account, and **Granola** with a real account.
+- **Calendar links from Outlook and Apple**, and invite files sent by real calendars.
+- **Float in a real call**: the window that stays on top of Zoom, Meet or Teams in Chrome.
+- **A server behind a real HTTPS proxy and domain**, the image on an ARM server, and the release
+  workflow itself (it first runs on the first version tag).
 
 ## Not done yet
 

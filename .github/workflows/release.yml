@@ -1,0 +1,137 @@
+name: Release
+
+# Push a version tag and this tests it, publishes the Docker image to GitHub's registry and writes
+# the GitHub release:
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# It also publishes the npm package, so `npx cueboard` runs the new version; the version in
+# package.json must match the tag (`npm version 0.2.0` sets both). The image is
+# ghcr.io/<owner>/cueboard, tagged with the version (0.1.0), its line (0.1) and latest, for both
+# Intel/AMD and ARM servers. A tag like v0.2.0-rc.1 is a pre-release: it gets only its own tag,
+# never latest, and on npm it's `next`, not what `npx cueboard` gets.
+#
+# Run it by hand (Actions → Release → Run workflow) to build for both platforms and check the
+# image without publishing anything.
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  image:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # the GitHub release
+      packages: write # the image
+    env:
+      PUBLISH: ${{ github.ref_type == 'tag' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build it for this machine and check it before anything is published
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: cueboard:check
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - run: scripts/check-image.sh cueboard:check
+
+      # The ARM build runs here under emulation, so it's slow, but it proves the image a Raspberry
+      # Pi or an ARM cloud server would pull actually starts and stays behind its password.
+      - name: Build it for ARM and check that too
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/arm64
+          load: true
+          tags: cueboard:check-arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - run: scripts/check-image.sh cueboard:check-arm64
+
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/cueboard
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+          labels: |
+            org.opencontainers.image.title=Cueboard
+            org.opencontainers.image.description=Visual prep for your next meeting, self-hosted with your own Claude key
+            org.opencontainers.image.licenses=AGPL-3.0-only
+
+      - if: env.PUBLISH == 'true'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build for Intel/AMD and ARM, and publish on a tag
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ env.PUBLISH == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: The GitHub release, with notes from the commits since the last one
+        if: env.PUBLISH == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          pre=""; case "$TAG" in *-*) pre="--prerelease" ;; esac
+          gh release create "$TAG" --verify-tag --generate-notes --title "Cueboard $TAG" $pre
+
+  # npm's trusted publishing: npm checks this workflow's identity with GitHub, so there's no token
+  # to keep. Set it up once on npmjs.com (CONTRIBUTING "Releasing").
+  npm:
+    needs: test
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - run: npm ci
+      - name: The tag and package.json agree
+        run: test "v$(node -p 'require("./package.json").version')" = "$GITHUB_REF_NAME"
+      - name: Install it in a fresh folder and run it, as `npx cueboard` would
+        run: scripts/check-package.sh
+      - name: Publish, unless this version is already on npm
+        run: |
+          v=$(node -p 'require("./package.json").version')
+          if [ -n "$(npm view "cueboard@$v" version 2>/dev/null)" ]; then echo "cueboard $v is already on npm"; exit 0; fi
+          case "$v" in *-*) npm publish --access public --tag next ;; *) npm publish --access public ;; esac

@@ -1,10 +1,15 @@
-# Cueboard on your own server:
-#   cp .env.example .env     then set CUE_PASSWORD and ANTHROPIC_API_KEY in it
+# Cueboard on your own server. In a folder with this file:
+#   put .env next to it (copy .env.example), and set CUE_PASSWORD and ANTHROPIC_API_KEY in it
 #   docker compose up -d
+# It runs the published image (ghcr.io/7mehul/cueboard). In a clone of the repo,
+# `docker compose up -d --build` runs your own copy of the code instead.
 # It answers on this machine's port 5180 only. Put a web server with HTTPS in front of it (README
-# "Self-hosting" has a two-line Caddy setup), or reach it over an SSH tunnel or a private network.
+# "Optional: run it on a server" has a two-line Caddy setup), or reach it over an SSH tunnel or a
+# private network.
 services:
   cueboard:
+    # Set CUEBOARD_VERSION in .env (say 0.1.0) to stay on one release; latest otherwise.
+    image: ghcr.io/7mehul/cueboard:${CUEBOARD_VERSION:-latest}
     build: .
     restart: unless-stopped
     env_file: .env
