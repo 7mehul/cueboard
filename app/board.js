@@ -95,6 +95,12 @@ const ICONS = {
   selectMore: '<rect x="3.5" y="3.5" width="11" height="11" rx="2"/><path d="M18 9v8a3 3 0 01-3 3H9"/><path d="M6.5 9l2 2 3.5-3.6"/>',
   selectAll: '<path d="M4 7.5V5a1 1 0 011-1h2.5M16.5 4H19a1 1 0 011 1v2.5M20 16.5V19a1 1 0 01-1 1h-2.5M7.5 20H5a1 1 0 01-1-1v-2.5"/><path d="M8.5 12l2.3 2.3 4.7-4.6"/>',
   section: '<rect x="3.5" y="7.5" width="17" height="12.5" rx="2.5"/><path d="M3.5 4h7"/>',
+  table: '<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M3.5 9.8h17M3.5 14.4h17M9.5 5v14"/>',
+  comment: '<path d="M4.5 6.5a2 2 0 012-2h11a2 2 0 012 2v8a2 2 0 01-2 2H11l-4.5 3.5V16.5h0a2 2 0 01-2-2z"/>',
+  rowAdd: '<rect x="3.5" y="4" width="17" height="9" rx="1.5"/><path d="M12 15.5v5M9.5 18h5"/>',
+  colAdd: '<rect x="4" y="3.5" width="9" height="17" rx="1.5"/><path d="M15.5 12h5M18 9.5v5"/>',
+  rowDel: '<rect x="3.5" y="4" width="17" height="9" rx="1.5"/><path d="M9.5 18h5"/>',
+  colDel: '<rect x="4" y="3.5" width="9" height="17" rx="1.5"/><path d="M18 9.5v5"/>',
   routeStraight: '<path d="M5 19L19 5"/><circle cx="5" cy="19" r="1.4"/><circle cx="19" cy="5" r="1.4"/>',
   routeElbow: '<path d="M4.5 18.5H12V5.5h7.5"/><circle cx="4.5" cy="18.5" r="1.4"/><circle cx="19.5" cy="5.5" r="1.4"/>',
   routeCurve: '<path d="M4.5 18.5C12 18.5 12 5.5 19.5 5.5"/><circle cx="4.5" cy="18.5" r="1.4"/><circle cx="19.5" cy="5.5" r="1.4"/>',
@@ -117,10 +123,10 @@ function str(v, max) {
 const initials = name => String(name || '').trim().split(/\s+/).filter(Boolean).map(w => w[0]).slice(0, 2).join('').toUpperCase() || '?';
 
 /* ================= model ================= */
-const TYPES = ['note', 'text', 'card', 'list', 'chart', 'stat', 'person', 'timeline', 'shape', 'image', 'ink', 'section'];
+const TYPES = ['note', 'text', 'card', 'list', 'chart', 'stat', 'person', 'timeline', 'shape', 'image', 'ink', 'section', 'table'];
 const FIXED_H = new Set(['chart', 'shape', 'image', 'ink', 'section']); // height is set, not grown by content
 const KEEP_RATIO = new Set(['image', 'ink']);                // resize keeps proportions unless Shift is held
-const BOXED = new Set(['card', 'list', 'chart', 'stat', 'person', 'timeline']);
+const BOXED = new Set(['card', 'list', 'chart', 'stat', 'person', 'timeline', 'table']);
 const COLORS = ['yellow', 'mint', 'sky', 'rose', 'lilac'];
 const FILLS = ['yellow', 'mint', 'sky', 'rose', 'lilac', 'white', 'none'];
 const INKS = ['ink', 'muted', 'accent', 'rose', 'mint', 'lilac'];
@@ -134,12 +140,12 @@ const SEC_COLORS = ['none', 'yellow', 'mint', 'sky', 'rose', 'lilac'];
 const DEF = {
   note: { w: 220, h: 190 }, text: { w: 520, h: 30 }, card: { w: 280, h: 140 }, list: { w: 280, h: 140 },
   chart: { w: 460, h: 270 }, stat: { w: 220, h: 120 }, person: { w: 280, h: 130 }, timeline: { w: 720, h: 170 }, shape: { w: 180, h: 120 },
-  image: { w: 320, h: 240 }, ink: { w: 100, h: 100 }, section: { w: 640, h: 420 },
+  image: { w: 320, h: 240 }, ink: { w: 100, h: 100 }, section: { w: 640, h: 420 }, table: { w: 480, h: 140 },
 };
 const MIN = {
   note: { w: 140, h: 100 }, text: { w: 80, h: 24 }, card: { w: 180, h: 80 }, list: { w: 180, h: 80 },
   chart: { w: 260, h: 200 }, stat: { w: 150, h: 90 }, person: { w: 200, h: 90 }, timeline: { w: 360, h: 140 }, shape: { w: 40, h: 30 },
-  image: { w: 40, h: 30 }, ink: { w: 8, h: 8 }, section: { w: 200, h: 120 },
+  image: { w: 40, h: 30 }, ink: { w: 8, h: 8 }, section: { w: 200, h: 120 }, table: { w: 200, h: 60 },
 };
 const ALLOWED = {
   note: ['x', 'y', 'w', 'h', 'color', 'title', 'text', 'memory'],
@@ -154,7 +160,11 @@ const ALLOWED = {
   image: ['x', 'y', 'w', 'h', 'alt'],
   ink: ['x', 'y', 'w', 'h'],
   section: ['x', 'y', 'w', 'h', 'title', 'color'],
+  table: ['x', 'y', 'w', 'h', 'title', 'cells', 'cols', 'fills'],
 };
+// A table: its first row is the header; the cells are short text. cols are the columns' relative
+// widths; fills tint a cell ("row:col" → a note color).
+const TBL = { rows: 40, cols: 10, cell: 200 };
 const IMG_SRC = /^(?:(?:idb|asset):[\w-]{1,64}|data:image\/(?:png|jpeg|webp|gif|svg\+xml);base64,[A-Za-z0-9+/=]+)$/;
 
 // Where an engine line came from ("Email · Aug 28"). Only the engine and saved boards carry it;
@@ -276,6 +286,20 @@ function normalizeEl(raw, keepId) {
       e.title = str(raw.title, 80);
       e.color = SEC_COLORS.includes(raw.color) ? raw.color : 'none';
       break;
+    case 'table': {
+      e.title = str(raw.title, 120);
+      const rows = (Array.isArray(raw.cells) ? raw.cells : []).filter(Array.isArray).slice(0, TBL.rows);
+      const n = clamp(Math.max(1, ...rows.map(r => r.length)), 1, TBL.cols);
+      e.cells = (rows.length ? rows : [[]]).map(r => Array.from({ length: n }, (_, c) => str(r[c], TBL.cell).replace(/\s*\n\s*/g, ' ')));
+      const cw = Array.isArray(raw.cols) ? raw.cols : [];
+      e.cols = Array.from({ length: n }, (_, c) => { const v = num(cw[c]); return isFinite(v) ? clamp(+v.toFixed(3), 0.3, 8) : 1; });
+      e.fills = {};
+      if (raw.fills && typeof raw.fills === 'object') for (const [k, v] of Object.entries(raw.fills)) {
+        const m = /^(\d{1,2}):(\d{1,2})$/.exec(k);
+        if (m && +m[1] < e.cells.length && +m[2] < n && COLORS.includes(v)) e.fills[k] = v;
+      }
+      break;
+    }
   }
   // A section stays upright: it's the frame things sit in.
   const rot = type === 'section' ? 0 : normAngle(num(raw.rot));
@@ -335,6 +359,18 @@ function normalizeBoard(raw) {
     ...(raw.settle === true ? { settle: true } : {}),
     ...(raw.reflow === true ? { reflow: true } : {}),
     ...(raw.gen && typeof raw.gen === 'object' && Array.isArray(raw.gen.els) ? { gen: normGen(raw.gen) } : {}),
+    comments: (Array.isArray(raw.comments) ? raw.comments : []).slice(0, 200).map(normComment).filter(c => c && ids.has(c.on)),
+  };
+}
+// A comment is pinned to one item: a request for Claude, or a note to self. It's open, sent to
+// Claude, or done (with what Claude said it did).
+function normComment(c) {
+  if (!c || typeof c !== 'object' || typeof c.on !== 'string' || !/^[\w-]{1,48}$/.test(c.on)) return null;
+  const text = str(c.text, 600).trim(); if (!text) return null;
+  return {
+    id: typeof c.id === 'string' && /^[\w-]{1,48}$/.test(c.id) ? c.id : rid('c'), on: c.on, text,
+    at: isFinite(num(c.at)) ? num(c.at) : Date.now(), state: c.state === 'done' ? 'done' : 'open',
+    ...(c.state === 'done' && str(c.reply, 300).trim() ? { reply: str(c.reply, 300).trim() } : {}),
   };
 }
 // What the engine drafted last time, kept so a refresh can tell its cards from the user's.
@@ -348,7 +384,7 @@ function normGen(g) {
   };
 }
 function serialize(b) {
-  return { title: b.title, updatedAt: b.updatedAt, example: !!b.example, view: b.view || null, elements: b.elements, links: b.links || [], ...(b.meetingId ? { meetingId: b.meetingId } : {}), ...(b.settle ? { settle: true } : {}), ...(b.reflow ? { reflow: true } : {}), ...(b.gen ? { gen: b.gen } : {}) };
+  return { title: b.title, updatedAt: b.updatedAt, example: !!b.example, view: b.view || null, elements: b.elements, links: b.links || [], ...(b.comments && b.comments.length ? { comments: b.comments } : {}), ...(b.meetingId ? { meetingId: b.meetingId } : {}), ...(b.settle ? { settle: true } : {}), ...(b.reflow ? { reflow: true } : {}), ...(b.gen ? { gen: b.gen } : {}) };
 }
 
 // A board the engine drew, as a starting arrangement the user then owns.
@@ -399,6 +435,8 @@ const asEl = $('#assistant'), asMsgs = $('#as-msgs'), asIn = $('#as-in'), asSend
 const gbar = $('#glancebar'), gQ = $('#g-q'), gChips = $('#g-chips'), gTitle = $('#g-title'), gnote = $('#gnote'), gnoteIn = $('#gnote-in');
 const linkLayer = sv('svg', { class: 'links', 'aria-hidden': 'true' });
 const overlay = h('div', { class: 'overlay' });
+// Comment pins, and the frame round what Claude is working on.
+const pinLayer = h('div', { class: 'pins' }), claimLayer = h('div', { class: 'claims', 'aria-hidden': 'true' });
 
 const PT = (() => { try { const d = document.createElement('div'); d.contentEditable = 'plaintext-only'; return d.contentEditable === 'plaintext-only'; } catch (_) { return false; } })();
 
@@ -588,7 +626,9 @@ function field(tag, cls, name, text, ph, opts) {
 // **bold**, *italic*, `code` and [a link](https://…) in what people write, and in notes and text,
 // lines that start "- " or "1. " as lists. A field shows them formatted and is edited as typed:
 // it keeps what was typed, and swaps back to it while someone edits.
-const MARKED = new Set(['text', 'line', 'item']);
+const MARKED = new Set(['text', 'line', 'item', 'cell']);
+// A cell that's a number, an amount or a percentage lines up on the right.
+const isNumCell = t => /^[\s(]*[-−+]?[$€£¥]?\s?\d[\d,.]*\s?(?:%|[kKmMbB]n?|x)?\)?\s*$/.test(String(t || ''));
 const MD_INLINE = /\*\*\*([^*\n]+?)\*\*\*|\*\*([^*\n]+?)\*\*|\*([^*\s](?:[^*\n]*?[^*\s])?)\*|`([^`\n]+)`|\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g;
 const MD_LIST = /^(\s*)([-•*]|\d{1,2}[.)])\s+/;
 const hasMarks = (t, multi) => /\*[^*\s]|`[^`\n]+`|\]\(https?:\/\//.test(t) || (multi && /^\s*(?:[-•*]|\d{1,2}[.)])\s+\S/m.test(t));
@@ -732,6 +772,22 @@ function build(e) {
       break;
     }
     case 'ink': n.append(inkSVG(e)); break;
+    case 'table': {
+      const sum = e.cols.reduce((a, b) => a + b, 0);
+      const tb = h('table', { class: 'tbl' }, h('colgroup', {}, e.cols.map(w => h('col', { style: `width:${(w / sum * 100).toFixed(3)}%` }))));
+      // A column of numbers has its header on the right too, over them.
+      const numCol = e.cells[0].map((_, c) => { const v = e.cells.slice(1).map(r => r[c]).filter(t => t.trim()); return v.length > 0 && v.filter(isNumCell).length * 2 > v.length; });
+      e.cells.forEach((row, r) => tb.append(h('tr', { class: r ? null : 'th' }, row.map((cell, c) => h('td', {
+        'data-fill': e.fills[r + ':' + c] || null, class: (r ? isNumCell(cell) : numCol[c]) ? 'num' : null,
+      }, field('div', 'cell-text', 'cell', cell, r ? '' : 'Heading', { single: 1, i: r + ':' + c }))))));
+      // Grips between columns, to drag their widths.
+      const grips = h('div', { class: 'col-grips', 'aria-hidden': 'true' });
+      let at = 0;
+      e.cols.slice(0, -1).forEach((w, c) => { at += w; grips.append(h('div', { class: 'col-grip', 'data-c': c, style: `left:${(at / sum * 100).toFixed(3)}%` })); });
+      n.append(field('div', 'tbl-title', 'title', e.title, 'Table', { single: 1 }), h('div', { class: 'tbl-wrap' }, tb, grips),
+        h('div', { class: 'tbl-add' }, h('button', { class: 'add-cell add-row', type: 'button' }, ic('plus'), 'Row'), h('button', { class: 'add-cell add-col', type: 'button' }, ic('plus'), 'Column')));
+      break;
+    }
     // Its name is the handle: the area itself lets clicks through to the board and what's on it.
     case 'section': n.append(h('div', { class: 'sec-head', title: 'Drag to move the section and everything in it' }, field('div', 'sec-title', 'title', e.title, 'Section', { single: 1 }))); break;
   }
@@ -754,11 +810,11 @@ function renderAll() {
   for (const e of els()) if (isSec(e)) world.append(build(e));
   world.append(linkLayer);
   for (const e of els()) if (!isSec(e)) world.append(build(e));
-  world.append(overlay, inkLayer);
+  world.append(overlay, claimLayer, pinLayer, inkLayer);
   world.style.setProperty('--z', S.view.z);
   renderLinks(); updateSelTools(); updateEmpty(); updateOverlay();
   if (S.glance) { buildChips(); applySearch(); }
-  queueFloat();
+  queueFloat(); queueIssues();
 }
 function rerender(e) {
   const old = nodes.get(e.id), n = build(e);
@@ -1159,6 +1215,7 @@ function renderLinks() {
     const lt = l.label && g.querySelector('.lbl-text');
     if (lt) { const bb = lt.getBBox(); g.insertBefore(sv('rect', { x: bb.x - 7, y: bb.y - 3, width: bb.width + 14, height: bb.height + 6, rx: 7, class: 'lbl-bg' }), lt); }
   }
+  renderPins();
   if (S.tempLink) {
     const t = S.tempLink, to = S.linkHover ? { id: S.linkHover } : t.to;
     const geom = linkGeom({ from: t.from, to, route: 'elbow' });
@@ -1271,6 +1328,140 @@ function seg(options, cur, onPick) {
 }
 function change(el, fn) { pushUndo(); fn(el); rerender(el); scheduleSave(); updateSelTools(); }
 
+/* ---------- tables ---------- */
+// The cell last edited in a table, which the toolbar's row and column actions act on.
+const CELL = { id: null, r: 0, c: 0 };
+// Tints keep to their cells when rows or columns come and go.
+function shiftFills(x, axis, at, d) {
+  const out = {};
+  for (const [k, v] of Object.entries(x.fills)) {
+    let [r, c] = k.split(':').map(Number);
+    const i = axis === 'r' ? r : c;
+    if (d < 0 && i === at) continue;
+    if (i >= at + (d > 0 ? 0 : 1)) { if (axis === 'r') r += d; else c += d; }
+    out[r + ':' + c] = v;
+  }
+  x.fills = out;
+}
+function tableOp(el, op, atEnd) {
+  const here = CELL.id === el.id && !atEnd;
+  const r = here ? Math.min(CELL.r, el.cells.length - 1) : el.cells.length - 1, c = here ? Math.min(CELL.c, el.cells[0].length - 1) : el.cells[0].length - 1;
+  const n = el.cells[0].length;
+  if ((op === 'addRow' && el.cells.length >= TBL.rows) || (op === 'addCol' && n >= TBL.cols)) { toast(op === 'addRow' ? `A table holds ${TBL.rows} rows` : `A table holds ${TBL.cols} columns`); return; }
+  if ((op === 'delRow' && el.cells.length < 2) || (op === 'delCol' && n < 2)) return;
+  change(el, x => {
+    if (op === 'addRow') { x.cells.splice(r + 1, 0, Array(n).fill('')); shiftFills(x, 'r', r + 1, 1); }
+    if (op === 'addCol') { x.cells.forEach(row => row.splice(c + 1, 0, '')); x.cols.splice(c + 1, 0, x.cols[c] || 1); shiftFills(x, 'c', c + 1, 1); x.w = Math.min(2400, Math.round(x.w * (n + 1) / n)); }
+    if (op === 'delRow') { x.cells.splice(r, 1); shiftFills(x, 'r', r, -1); }
+    if (op === 'delCol') { x.cells.forEach(row => row.splice(c, 1)); x.cols.splice(c, 1); shiftFills(x, 'c', c, -1); x.w = Math.max(MIN.table.w, Math.round(x.w * (n - 1) / n)); }
+  });
+  const nr = op === 'addRow' ? r + 1 : op === 'delRow' ? Math.max(0, r - 1) : r, nc = op === 'addCol' ? c + 1 : op === 'delCol' ? Math.max(0, c - 1) : c;
+  Object.assign(CELL, { id: el.id, r: nr, c: nc });
+  if (op === 'addRow' || op === 'addCol') setTimeout(() => focusField(el.id, 'cell', nr + ':' + nc), 30);
+}
+/* ---------- comments ---------- */
+// A comment is pinned to one item. With Claude, comments are requests: send them, together or one
+// at a time, and Claude changes only what each is pinned to and says what it did. Without Claude
+// they're notes to yourself.
+const comments = () => board().comments || (board().comments = []);
+const commentsOn = id => comments().filter(c => c.on === id);
+const sending = new Set();
+const openComments = () => comments().filter(c => c.state !== 'done' && !sending.has(c.id) && byId(c.on));
+const aiReady = () => !AI.off && !!AI.sample;
+function renderPins() {
+  pinLayer.textContent = '';
+  if (!board() || S.glance) { updateCommentsBtn(); return; }
+  const by = new Map();
+  for (const c of comments()) { if (!byId(c.on)) continue; if (!by.has(c.on)) by.set(c.on, []); by.get(c.on).push(c); }
+  for (const [id, cs] of by) {
+    const b = boxOf(byId(id)), open = cs.filter(c => c.state !== 'done').length, busy = cs.some(c => sending.has(c.id));
+    pinLayer.append(h('button', {
+      class: 'cpin' + (open ? '' : ' done') + (busy ? ' busy' : ''), type: 'button', 'data-id': id,
+      title: busy ? 'Claude is working on this' : open ? `${open} open ${open === 1 ? 'comment' : 'comments'}` : 'Comments done',
+      'aria-label': 'Comments', style: `left:${b.x + b.w}px;top:${b.y}px`,
+    }, open ? String(open) : ic('check')));
+  }
+  updateCommentsBtn();
+}
+function updateCommentsBtn() {
+  const b = $('#b-comments'); if (!b) return;
+  const n = board() && !S.glance && aiReady() ? openComments().length : 0;
+  b.hidden = !n;
+  if (n) b.querySelector('.lbl').textContent = `Send ${n} ${n === 1 ? 'comment' : 'comments'}`;
+}
+function openCommentPop(id, focus) {
+  if (!byId(id)) return;
+  closePop(); S.pop = id; S.popKind = 'comments';
+  drawCommentPop(focus);
+}
+function drawCommentPop(focus) {
+  const id = S.pop, el = byId(id); if (!el || S.popKind !== 'comments') return;
+  pop.textContent = '';
+  const can = aiReady();
+  const rows = commentsOn(id).map(c => h('div', { class: 'cm-row' + (c.state === 'done' ? ' done' : '') },
+    h('div', { class: 'cm-text', text: c.text }),
+    h('div', { class: 'cm-meta', text: sending.has(c.id) ? 'Claude is working on it…' : c.state === 'done' ? (c.reply ? 'Claude: ' + c.reply : 'Done') : can ? 'Not sent yet' : 'A note to yourself' }),
+    h('div', { class: 'cm-acts' },
+      c.state !== 'done' && can && !sending.has(c.id) ? h('button', { class: 'linkbtn', type: 'button', onclick: () => sendComments([c]) }, 'Send to Claude') : null,
+      sending.has(c.id) ? null : h('button', { class: 'linkbtn', type: 'button', onclick: () => resolveComment(c.id) }, c.state === 'done' ? 'Clear' : 'Resolve'))));
+  const ta = h('textarea', { class: 'in cm-in', rows: 2, maxlength: 600, 'aria-label': 'New comment', placeholder: can ? 'Ask Claude to change this, or leave yourself a note' : 'Leave yourself a note' });
+  const add = send => {
+    const t = ta.value.trim(); if (!t) { ta.focus(); return; }
+    const c = normComment({ on: id, text: t }); comments().push(c); scheduleSave(); renderPins();
+    if (send) sendComments([c]); else drawCommentPop(true);
+  };
+  ta.addEventListener('keydown', ev => {
+    if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); add(false); }
+    else if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); closePop(); }
+  });
+  pop.append(
+    h('div', { class: 'pop-head' }, h('strong', { text: 'Comments' }), h('button', { class: 'btn icon-only', type: 'button', 'aria-label': 'Close', onclick: closePop }, ic('close'))),
+    h('div', { class: 'cm-on', text: 'On ' + (labelOf(el) || 'this ' + el.type) }),
+    rows.length ? h('div', { class: 'cm-list' }, rows) : null,
+    ta,
+    h('div', { class: 'cd-foot' },
+      h('button', { class: 'btn', type: 'button', onclick: () => add(false) }, 'Add'),
+      can ? h('button', { class: 'btn primary', type: 'button', onclick: () => add(true) }, ic('spark'), 'Add and send') : null));
+  pop.hidden = false; positionPop();
+  if (focus) setTimeout(() => ta.focus(), 30);
+}
+function resolveComment(cid) {
+  board().comments = comments().filter(c => c.id !== cid);
+  scheduleSave(); renderPins(); drawCommentPop();
+}
+// One request for all of them; Claude says what it did for each.
+async function sendComments(list) {
+  if (AI.busy) { toast('Claude is still working on the last request'); return; }
+  list = list.filter(c => c.state !== 'done' && byId(c.on) && !sending.has(c.id));
+  if (!list.length) return;
+  const lines = list.map(c => { const el = byId(c.on), l = labelOf(el); return `- comment ${c.id} on ${c.on} (${el.type}${l ? ` "${l.slice(0, 60)}"` : ''}): ${c.text}`; });
+  const text = `Apply these comments. Each is pinned to the element with the id given: change only that element, unless the comment asks for more. Add "comments": [{"id": "<comment id>", "reply": "one short line: what you did, or why you didn't"}] to your JSON, one for each comment.\n${lines.join('\n')}`;
+  list.forEach(c => sending.add(c.id));
+  renderPins(); drawCommentPop();
+  const out = await ask(text, { shown: list.length === 1 ? 'Comment: ' + list[0].text : `${list.length} comments:\n` + list.map(c => '- ' + c.text).join('\n'), claim: [...new Set(list.map(c => c.on))] });
+  for (const c of list) {
+    sending.delete(c.id);
+    const r = out && out.replies.get(c.id);
+    if (r || (out && out.changed)) { c.state = 'done'; if (r) c.reply = r; else delete c.reply; }
+  }
+  scheduleSave(); renderPins(); drawCommentPop();
+}
+// A dashed frame round what Claude is working on, until it's done.
+function showClaim(ids) {
+  claimLayer.textContent = '';
+  for (const id of ids || []) {
+    const el = byId(id); if (!el) continue;
+    const b = boxOf(el), p = 8;
+    claimLayer.append(h('div', { class: 'claim', style: `left:${b.x - p}px;top:${b.y - p}px;width:${b.w + 2 * p}px;height:${b.h + 2 * p}px` }, h('b', { text: 'Claude is working on this' })));
+  }
+}
+
+function tintCell(el, color) {
+  const k = CELL.id === el.id ? CELL.r + ':' + CELL.c : null;
+  if (!k) { toast('Click into a cell first, then pick its color'); return; }
+  change(el, x => { if (color === 'none') delete x.fills[k]; else x.fills[k] = color; });
+}
+
 function updateSelTools() {
   selbar.textContent = '';
   if (S.glance || !board()) { selbar.hidden = true; return; }
@@ -1322,6 +1513,12 @@ function updateSelTools() {
     selbar.append(...swatches(COLORS, el.color, 'sw', c => change(el, x => { x.color = c; })), sep());
   }
   if (isSec(el)) selbar.append(...swatches(SEC_COLORS, el.color, 'sw fill', c => change(el, x => { x.color = c; })), sep());
+  if (el.type === 'table') {
+    const cur = CELL.id === el.id ? el.fills[CELL.r + ':' + CELL.c] || 'none' : null;
+    selbar.append(tbtn('rowAdd', 'Add a row below', () => tableOp(el, 'addRow')), tbtn('colAdd', 'Add a column to the right', () => tableOp(el, 'addCol')),
+      tbtn('rowDel', 'Delete this row', () => tableOp(el, 'delRow')), tbtn('colDel', 'Delete this column', () => tableOp(el, 'delCol')), sep(),
+      ...swatches([...COLORS, 'none'], cur, 'sw fill', c => tintCell(el, c)), sep());
+  }
   if (el.type === 'text') {
     selbar.append(seg([['h1', 'Title'], ['h2', 'Heading'], ['body', 'Body']], el.size, k => change(el, x => { x.size = k; })), sep(),
       ...swatches(INKS, el.ink, 'sw ink', c => change(el, x => { x.ink = c; })), sep());
@@ -1340,6 +1537,7 @@ function updateSelTools() {
     selbar.append(tbtn('edit', 'Edit data', () => openChartEditor(el.id), { showLabel: true }),
       seg([['bar', 'Bar'], ['line', 'Line']], el.kind, k => { pushUndo(); el.kind = k; refreshChart(el); scheduleSave(); updateSelTools(); }), sep());
   }
+  selbar.append(tbtn('comment', 'Comment', () => openCommentPop(el.id, true)));
   if (!AI.off) selbar.append(tbtn('spark', 'Ask', () => { setAssistant(true); asIn.focus(); }, { showLabel: true }));
   if (!isSec(el)) selbar.append(tbtn('section', 'Put in a section', wrapInSection));
   if (el.rot) selbar.append(tbtn('straighten', `Straighten (now ${Math.round(el.rot)}°)`, straightenSel));
@@ -1400,6 +1598,7 @@ function updateUndo() { $('#b-undo').disabled = !S.undo.length; $('#b-redo').dis
 const MAINF = {
   note: '[data-field="text"]', text: '[data-field="text"]', card: '[data-field="title"]', list: '[data-field="item"]', stat: '[data-field="label"]',
   chart: '[data-field="title"]', person: '[data-field="name"]', timeline: '[data-field="title"]', shape: '[data-field="text"]', section: '[data-field="title"]',
+  table: '[data-field="cell"]',
 };
 let nudge = 0;
 function addEl(type, extra, at) {
@@ -1408,6 +1607,7 @@ function addEl(type, extra, at) {
   if (!e) return null;
   if (type === 'chart' && !e.data.length) { e.title = 'New chart'; e.data = [{ label: 'Q1', value: 12 }, { label: 'Q2', value: 18 }, { label: 'Q3', value: 15 }, { label: 'Q4', value: 24 }]; }
   if (type === 'list' && !e.items.length) e.items = [{ text: '', done: false }];
+  if (type === 'table' && e.cells.length === 1 && e.cells[0].length === 1 && !e.cells[0][0]) { e.cells = [['', '', ''], ['', '', ''], ['', '', '']]; e.cols = [1, 1, 1]; }
   if ((type === 'card' || type === 'person') && !e.lines.length) e.lines = [{ text: '' }];
   if (type === 'card' && !e.tag) e.tag = 'Context';
   if (at) { e.x = Math.round(at.x); e.y = Math.round(at.y); }
@@ -1781,7 +1981,13 @@ function updateFieldModel(f) {
   const name = f.dataset.field;
   let v = readField(f);
   if (f.dataset.single) v = v.replace(/\s*\n\s*/g, ' ');
-  if (name === 'item') {
+  if (name === 'cell') {
+    const [r, c] = f.dataset.i.split(':').map(Number);
+    if (el.cells[r] && el.cells[r][c] !== v) {
+      el.cells[r][c] = v.slice(0, TBL.cell);
+      const td = f.closest('td'); if (td) td.classList.toggle('num', r > 0 && isNumCell(v));
+    }
+  } else if (name === 'item') {
     const it = el.items[+f.dataset.i];
     if (it && it.text !== v) { it.text = v.slice(0, 240); delete it.cite; if (it.gap || it.memory) { delete it.gap; delete it.memory; const li = f.closest('li'); if (li) li.classList.remove('gap', 'mem'); } }
   } else if (name === 'line') {
@@ -1884,6 +2090,80 @@ function settle(pushOnly) {
   renderLinks();
 }
 
+/* ================= layout checks ================= */
+// What the page can measure that a person would call a mess: things partly on top of each other,
+// and words cut off by a box too small for them. Something sitting wholly on another (a label on a
+// shape, a note on a picture) is meant, and a drawing goes over things on purpose. Tidy fixes
+// these first, worst first, with the smallest moves; Tidy again rearranges the whole board.
+function layoutIssues() {
+  if (!board()) return [];
+  const out = [], units = unitsOf(els().filter(e => !isSec(e) && e.type !== 'ink'));
+  const inside = (p, q) => p.x >= q.x - 1 && p.y >= q.y - 1 && p.x + p.w <= q.x + q.w + 1 && p.y + p.h <= q.y + q.h + 1;
+  for (let i = 0; i < units.length; i++) for (let j = i + 1; j < units.length; j++) {
+    const a = units[i].box, b = units[j].box;
+    const w = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x), hh = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+    if (w <= 6 || hh <= 6 || inside(a, b) || inside(b, a)) continue;
+    out.push({ kind: 'overlap', pair: [units[i], units[j]], area: w * hh, ids: units[i].members.concat(units[j].members).map(e => e.id) });
+  }
+  for (const e of els()) {
+    const n = nodes.get(e.id); if (!n) continue;
+    if (e.type === 'shape') {
+      const t = n.querySelector('.shape-text'), need = t ? t.offsetHeight + 20 : 0;
+      if (t && t.textContent.trim() && need > n.offsetHeight + 2) out.push({ kind: 'cut', el: e, grow: { h: Math.ceil(need) }, area: (need - n.offsetHeight) * n.offsetWidth, ids: [e.id] });
+    }
+    const title = e.type === 'chart' ? n.querySelector('.chart-title') : isSec(e) && !n.classList.contains('solo') ? n.querySelector('.sec-title') : null;
+    if (title && title.textContent.trim() && title.scrollWidth > title.clientWidth + 1) {
+      const more = title.scrollWidth - title.clientWidth + 12;
+      out.push({ kind: 'cut', el: e, grow: { w: Math.ceil(e.w + more) }, area: more * 30, ids: [e.id] });
+    }
+  }
+  return out.sort((a, b) => b.area - a.area);
+}
+const issueText = list => {
+  const o = list.filter(i => i.kind === 'overlap').length, c = list.filter(i => i.kind === 'cut').length;
+  return [o ? `${o} ${o === 1 ? 'overlap' : 'overlaps'}` : '', c ? `${c} cut off` : ''].filter(Boolean).join(', ');
+};
+// The smallest moves that clear them: what comes later in reading order steps right or down,
+// whichever is less, and so on down the board for whatever that then covers.
+function fixLayout() {
+  let fixed = 0, guard = 60, list = layoutIssues();
+  if (!list.length) return 0;
+  pushUndo();
+  const before = list.length, said = issueText(list);
+  while (list.length && guard-- > 0) {
+    const it = list[0];
+    if (it.kind === 'cut') {
+      if (it.grow.h) it.el.h = Math.min(1600, it.grow.h);
+      if (it.grow.w) it.el.w = Math.min(2400, it.grow.w);
+      const n = nodes.get(it.el.id); if (n) { applySize(n, it.el); refreshChart(it.el); }
+    } else {
+      const [p, q] = it.pair.slice().sort((u, v) => (u.box.y - v.box.y) || (u.box.x - v.box.x));
+      const dx = p.box.x + p.box.w + GAP - q.box.x, dy = p.box.y + p.box.h + GAP - q.box.y;
+      const right = dx > 0 && (dy <= 0 || dx < dy);
+      for (const e of q.members) moveTo(e, right ? e.x + dx : e.x, right ? e.y : e.y + dy);
+    }
+    fixed++;
+    list = layoutIssues();
+  }
+  afterMove(); updateIssues();
+  toast(`Fixed ${said}, keeping your layout. Tidy again to rearrange the whole board.`, { label: 'Undo', fn: undo });
+  return before;
+}
+// The Tidy button says how many there are, and shows them while the pointer is on it.
+let issuesT = 0;
+function queueIssues() { clearTimeout(issuesT); issuesT = setTimeout(updateIssues, 500); }
+function updateIssues() {
+  const b = $('#b-tidy'); if (!b || !board()) return;
+  const list = S.glance ? [] : layoutIssues();
+  b.dataset.issues = list.length ? String(list.length) : '';
+  b.title = list.length ? `Tidy: fix ${issueText(list)}, keeping your layout` : 'Tidy: rearrange the board into neat columns';
+  S.issues = list;
+}
+function showIssues(on) {
+  nodes.forEach(n => n.classList.remove('issue'));
+  if (on && S.issues) for (const i of S.issues) for (const id of i.ids) { const n = nodes.get(id); if (n) n.classList.add('issue'); }
+}
+
 /* ================= persistence ================= */
 const LS_KEY = 'cueboard.boards.v1';
 function canLocal() { try { localStorage.setItem('__cb', '1'); localStorage.removeItem('__cb'); return true; } catch (_) { return false; } }
@@ -1947,6 +2227,7 @@ function scheduleSave(id) {
   dirty.add(b.id); setStatus('saving');
   if (b.id === S.boardId) queueFloat();
   clearTimeout(saveT); saveT = setTimeout(flush, 700);
+  if (b.id === S.boardId) queueIssues();
 }
 function flush() {
   clearTimeout(saveT);
@@ -2125,7 +2406,7 @@ function closeMenu() { if (!menu.hidden) { menu.hidden = true; $('#b-menu').setA
 /* ================= chart data editor ================= */
 function openChartEditor(id) {
   const el = byId(id); if (!el || el.type !== 'chart') return;
-  S.pop = id; pushUndo();
+  closePop(); S.pop = id; S.popKind = 'chart'; pushUndo();
   pop.textContent = '';
   const redraw = () => { refreshChart(el); scheduleSave(); };
   const rows = h('div', { class: 'cd-rows' });
@@ -2165,17 +2446,19 @@ function positionPop() {
   const n = nodes.get(S.pop); if (!n) return;
   const r = n.getBoundingClientRect(), sr = stage.getBoundingClientRect();
   const pw = pop.offsetWidth, ph = pop.offsetHeight;
+  // Clear of the assistant when it's open beside the board.
+  const room = sr.width - (S.asOpen ? 396 + 12 : 0);
   let x = r.right - sr.left + 16;
-  if (x + pw > sr.width - 8) x = r.left - sr.left - pw - 16;
-  x = clamp(x, 8, Math.max(8, sr.width - pw - 8));
+  if (x + pw > room - 8) x = r.left - sr.left - pw - 16;
+  x = clamp(x, 8, Math.max(8, room - pw - 8));
   const y = clamp(r.top - sr.top, 70, Math.max(70, sr.height - ph - 8));
   pop.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
 }
 function closePop() {
   if (!S.pop) return;
   const el = byId(S.pop);
-  S.pop = null; pop.hidden = true;
-  if (el) { el.data = el.data.filter(d => isFinite(d.value)); refreshChart(el); }
+  S.pop = null; S.popKind = null; pop.hidden = true;
+  if (el && el.type === 'chart') { el.data = el.data.filter(d => isFinite(d.value)); refreshChart(el); }
   scheduleSave();
 }
 
@@ -2198,12 +2481,12 @@ function updateEmpty() {
 /* ================= glance ================= */
 function textOf(e) {
   return [e.text, e.tag, e.title, e.name, e.label, e.value, e.note, e.caption, e.alt]
-    .concat((e.items || []).map(i => i.text), (e.lines || []).map(l => l.text), (e.events || []).map(v => v.label), (e.data || []).map(d => d.label))
+    .concat((e.items || []).map(i => i.text), (e.lines || []).map(l => l.text), (e.events || []).map(v => v.label), (e.data || []).map(d => d.label), (e.cells || []).flat())
     .filter(Boolean).join(' ');
 }
 // Words without their marks: **bold** reads as bold, a link as its label.
 const plainOf = t => String(t || '').replace(MD_INLINE, (m, a, b, c, d, l) => a || b || c || d || l || m);
-function labelOf(e) { return plainOf(String(e.title || e.name || e.label || e.text || e.tag || '').split('\n')[0]).trim(); }
+function labelOf(e) { return plainOf(String(e.title || e.name || e.label || e.text || e.tag || (e.cells ? e.cells[0].filter(Boolean).join(' · ') : '')).split('\n')[0]).trim(); }
 function buildChips() {
   gChips.textContent = '';
   for (const e of readingOrder(els())) {
@@ -3618,7 +3901,7 @@ function floatNode(e, W, open) {
   nodes.delete(id);
   n.dataset.id = e.id;
   if (open) n.classList.add('fl-open');
-  n.querySelectorAll('.handle, .rot-handle, .add-item').forEach(x => x.remove());
+  n.querySelectorAll('.handle, .rot-handle, .add-item, .tbl-add, .col-grips').forEach(x => x.remove());
   const rows = n.querySelectorAll('.lines > .ln');
   (e.lines || []).forEach((l, i) => { const c = rows[i] && floatCite(l.cite, false, l); if (c) rows[i].append(c); });
   if (e.type === 'list') n.querySelectorAll('.items > li').forEach((li, i) => {
@@ -3789,7 +4072,7 @@ AI.ready = useCap('sample').then(async s => {
   if (s || !Engine || !Engine.serverStatus) return s;
   const st = await Engine.serverStatus();
   return st.available && st.chat ? localSample() : null;
-}).then(s => { AI.sample = s; AI.off = !s; if (!s && S.asAuto && S.asOpen && !S.glance) setAssistant(false, true); renderChat(); updateEmpty(); updateSelTools(); return s; });
+}).then(s => { AI.sample = s; AI.off = !s; if (!s && S.asAuto && S.asOpen && !S.glance) setAssistant(false, true); renderChat(); updateEmpty(); updateSelTools(); updateCommentsBtn(); return s; });
 try { AI.deep = localStorage.getItem('cueboard.deep') === '1'; } catch (_) { }
 asDeep.checked = AI.deep;
 asDeep.addEventListener('change', () => { AI.deep = asDeep.checked; try { localStorage.setItem('cueboard.deep', AI.deep ? '1' : '0'); } catch (_) { } });
@@ -3807,6 +4090,8 @@ ACTIONS
 {"op":"link","from":"<id>","to":"<id>","label":"optional, a few words","route":"elbow|straight|curve"}   draw an arrow between two elements (who-decides maps, flows). elbow (the default) runs in right angles around cards
 {"op":"tidy"}                                re-arrange the whole board into neat columns. Only when the user asks to tidy or rearrange.
 
+COMMENTS: the board's open comments come with it, each pinned to an element ("on"). When a message asks you to apply comments, change only the element each is pinned to unless the comment asks for more, and add "comments": [{"id":"<comment id>","reply":"one short line: what you did, or why you didn't"}] to your JSON, one for each.
+
 ELEMENT TYPES (canvas pixels; x grows right, y grows down). Images and drawings on the board are the user's; you can move or delete them when asked but can't create them.
 note    {"type":"note","title":"topic","text":"...","color":"yellow|mint|sky|rose|lilac"}   a quick note about one topic, 1-3 short lines
 text    {"type":"text","text":"...","size":"h1|h2|body"}   headings and section labels
@@ -3816,6 +4101,7 @@ list    {"type":"list","title":"...","items":[{"text":"...","done":false}]}   qu
 chart   {"type":"chart","title":"...","kind":"bar|line","prefix":"$","suffix":"k","data":[{"label":"Jan","value":12}],"caption":"one-line takeaway"}
 stat    {"type":"stat","label":"...","value":"$48k","note":"+18% MoM"}   one key number
 shape   {"type":"shape","shape":"rect|round|ellipse|diamond","fill":"yellow|mint|sky|rose|lilac|white|none","text":"..."}
+table   {"type":"table","title":"...","cells":[["Option","Price","Risk"],["Pro","$20","Low"]],"cols":[2,1,1]}   for what's compared point by point (options, competitors, who decides what): never a grid of cards. Row 1 is the header; keep cells to a few words; cols are the columns' relative widths
 section {"type":"section","title":"...","color":"none|yellow|mint|sky|rose|lilac","x":0,"y":0,"w":640,"h":420}   a titled area that holds related items: it sits behind them and moves them with it. Anything whose middle is inside it belongs to it. Give x, y, w and h so it encloses what it holds, 28px clear inside each edge and 60px at the top for its title. Use one for a group of items worth moving or reading together, not around a single item.
 
 TEXT MARKS: in a note's text, a text, a shape's text, card and person lines and checklist items you may use **bold**, *italic*, \`code\` and [label](https://…) links; in a note's text and a text, lines that start "- " or "1. " are lists. Use them sparingly: bold for the one thing to remember, a link only to a real page you were given.
@@ -3825,6 +4111,7 @@ HOW TO WRITE
 - Write in the user's own voice, as their prep notes.
 - Never invent facts about real people, companies or numbers. When you don't know something, write a placeholder in square brackets, like "[check their last fund size]", and say in your reply what to look up.
 - Only chart numbers the user gave you or that are already on the board. If a chart needs data you don't have, ask for it.
+- LAYOUT ISSUES, when listed, are things the page measured as overlapping or cut off. Don't add to them: place new things clear of others. Fix them when the user asks you to tidy, or when your own change caused them.
 - The user arranged this board. Never move, rewrite or delete their content unless they ask. When they say "this" or "it", they mean the SELECTED element.
 - Drafting a whole board: one h1 text header, a Key notes card with a Goal line, then the meeting's plan as 3 or 4 cards in a row, each tagged with its minutes ("0–5 min") and titled with what happens then: the first with an "Open with" line, the last with an "Ask" line. Under each part, what's needed in it: a person card for each attendee, a list of questions to ask, notes for likely objections with short answers, and stats or charts only for numbers you were given. 6-12 elements is plenty.
 - Colors: sky = people and context, mint = goals and good news, rose = risks and objections, yellow = reminders, lilac = pitch and talk track.`;
@@ -3839,7 +4126,8 @@ function boardJSON() {
     return o;
   });
   const ls = links().filter(l => l.from.id && l.to.id).map(l => Object.assign({ from: l.from.id, to: l.to.id }, l.label ? { label: l.label } : {}));
-  let s = JSON.stringify({ elements: out, arrows: ls }, (k, v) => (k === 'cite' ? undefined : v));
+  const cs = board().comments ? openComments().map(c => ({ id: c.id, on: c.on, text: c.text })) : [];
+  let s = JSON.stringify(Object.assign({ elements: out, arrows: ls }, cs.length ? { comments: cs } : {}), (k, v) => (k === 'cite' ? undefined : v));
   if (s.length > 90000) s = s.slice(0, 90000) + '…';
   return s;
 }
@@ -3855,10 +4143,11 @@ function receiptText(rc) {
 function buildTurns(text, history) {
   const hist = [];
   for (const m of history.slice(-12)) {
-    if (m.role === 'user' && m.text) hist.push({ role: 'user', content: m.text });
+    if (m.role === 'user' && m.text) hist.push({ role: 'user', content: m.sent || m.text });
     else if (m.role === 'assistant' && m.text && !m.error) hist.push({ role: 'assistant', content: m.text + (m.receipt ? `\n(Applied to the board: ${receiptText(m.receipt)})` : '') });
   }
-  const ctx = `BOARD TITLE: ${board().title}\nBOARD (JSON):\n${boardJSON()}\n\nSELECTED ELEMENT: ${S.sel || 'none'}\n\nUSER MESSAGE:\n${text}`;
+  const iss = layoutIssues().slice(0, 8).map(i => i.kind === 'overlap' ? `${i.pair[0].members[0].id} and ${i.pair[1].members[0].id} overlap` : `${i.el.id}'s words are cut off`);
+  const ctx = `BOARD TITLE: ${board().title}\nBOARD (JSON):\n${boardJSON()}\n\nSELECTED ELEMENT: ${S.sel || 'none'}${iss.length ? `\n\nLAYOUT ISSUES (measured on the page): ${iss.join('; ')}` : ''}\n\nUSER MESSAGE:\n${text}`;
   return [{ role: 'user', content: RULES }].concat(hist, [{ role: 'user', content: ctx }]);
 }
 function extractReply(t) {
@@ -3894,7 +4183,7 @@ function applyActions(acts, opts) {
   if (!Array.isArray(acts) || !acts.length) return null;
   const snap = snapshot();
   const list = els(), wasEmpty = list.length === 0;
-  const added = [], toPlace = [];
+  const added = [], toPlace = [], changedIds = [];
   let updated = 0, removed = 0, linked = 0, tidied = false;
   for (const a of acts.slice(0, 60)) {
     if (!a || typeof a !== 'object') continue;
@@ -3913,7 +4202,7 @@ function applyActions(acts, opts) {
       const e = normalizeEl(merged, true); if (!e) continue;
       if (cur.live) e.live = true;
       keepCites(cur, e);
-      list[i] = e; updated++;
+      list[i] = e; updated++; changedIds.push(e.id);
     } else if (a.op === 'delete') {
       const ids = Array.isArray(a.ids) ? a.ids : [a.id];
       for (const id of ids) { const i = list.findIndex(e => e.id === id); if (i >= 0) { list.splice(i, 1); removed++; } }
@@ -3936,6 +4225,7 @@ function applyActions(acts, opts) {
   if (toPlace.length) placeNew(toPlace);
   if (tidied) tidyLayout(true);
   added.forEach(e => { const n = nodes.get(e.id); if (n) n.classList.add('fresh'); });
+  changedIds.forEach(id => { const n = nodes.get(id); if (n) n.classList.add('changed'); });
   renderLinks(); scheduleSave(); updateEmpty(); positionSelTools();
   if (S.glance) buildChips();
   requestAnimationFrame(() => {
@@ -3950,7 +4240,7 @@ async function ask(text, opts) {
   opts = opts || {};
   setAssistant(true);
   const chat = curChat();
-  chat.push({ role: 'user', text });
+  chat.push(Object.assign({ role: 'user', text: opts.shown || text }, opts.shown ? { sent: text } : {}));
   const m = { role: 'assistant', text: '', status: 'thinking' };
   chat.push(m);
   renderChat();
@@ -3959,7 +4249,8 @@ async function ask(text, opts) {
   AI.busy = true; setBusy(true); updateEmpty();
   const ctl = new AbortController(); AI.ctl = ctl;
   const startBoard = S.boardId;
-  let changed = false;
+  let changed = false, replies = new Map();
+  showClaim(opts.claim || (S.multi.size === 1 && S.sel ? [S.sel] : null));
   try {
     const turns = buildTurns(text, chat.slice(0, -2));
     const res = await s.json(turns, {
@@ -3969,6 +4260,7 @@ async function ask(text, opts) {
     let reply = '', acts = [];
     if (Array.isArray(res)) acts = res;
     else if (res && typeof res === 'object') { reply = typeof res.reply === 'string' ? res.reply : ''; acts = Array.isArray(res.actions) ? res.actions : []; }
+    if (res && Array.isArray(res.comments)) for (const x of res.comments) if (x && typeof x.id === 'string' && typeof x.reply === 'string') replies.set(x.id, x.reply.trim().slice(0, 300));
     if (S.boardId !== startBoard) { m.text = reply; m.error = 'You switched boards while I was working, so nothing was changed.'; }
     else {
       const rc = applyActions(acts, opts);
@@ -3986,10 +4278,11 @@ async function ask(text, opts) {
     }
   } finally {
     m.status = 'done';
-    AI.busy = false; AI.ctl = null; setBusy(false);
+    AI.busy = false; AI.ctl = null; setBusy(false); showClaim(null);
     if (opts.draft && !changed && board() && !board().elements.length) board().skipPrompt = false;
     renderChat(); updateEmpty();
   }
+  return { changed, replies };
 }
 function setBusy(b) {
   asSend.textContent = '';
@@ -4100,6 +4393,7 @@ function submitAsk() { const t = asIn.value.trim(); if (!t || AI.busy) return; a
 $('#as-form').addEventListener('submit', e => { e.preventDefault(); submitAsk(); });
 $('#as-close').addEventListener('click', () => setAssistant(false));
 $('#b-ai').addEventListener('click', () => setAssistant(!S.asOpen));
+$('#b-comments').addEventListener('click', () => sendComments(openComments()));
 
 /* ================= toast ================= */
 let toastT = null;
@@ -4214,6 +4508,8 @@ function onDown(e) {
     capture(e.pointerId); return;
   }
 
+  const pin = t.closest && t.closest('.cpin');
+  if (pin && !S.glance) { e.preventDefault(); openCommentPop(pin.dataset.id); return; }
   if (!S.glance) {
     if (t.closest && t.closest('.cdot') && S.sel) {
       e.preventDefault();
@@ -4247,6 +4543,13 @@ function onDown(e) {
       startPan(e, el.id); canvas.classList.remove('panning'); return;
     }
     if (t.closest('button, input, textarea')) { S.allowNative = true; return; }
+    const grip = t.closest('.col-grip');
+    if (grip) {
+      e.preventDefault(); select(el.id);
+      const wrap = node.querySelector('.tbl-wrap');
+      drag = { kind: 'colw', id: el.id, c: +grip.dataset.c, cols: el.cols.slice(), tw: wrap ? wrap.offsetWidth : el.w, sx: e.clientX, sy: e.clientY, moved: false };
+      capture(e.pointerId); return;
+    }
     const handle = t.closest('.handle');
     if (handle) {
       e.preventDefault(); select(el.id);
@@ -4339,7 +4642,7 @@ function onMove(e) {
     if (drag.kind === 'move') { pushUndo(); drag.edit = null; document.body.classList.add('dragging'); updateOverlay(); }
     if (drag.kind === 'rotate') { pushUndo(); document.body.classList.add('rotating'); }
     if (drag.kind === 'resize') updateOverlay();
-    if (drag.kind === 'lmid') pushUndo();
+    if (drag.kind === 'lmid' || drag.kind === 'colw') pushUndo();
   }
   const z = S.view.z;
   if (drag.kind === 'move') {
@@ -4402,6 +4705,14 @@ function onMove(e) {
     S.tempLink.to = toWorld(e.clientX, e.clientY);
     markLinkTarget(elementAt(e.clientX, e.clientY, drag.from));
     renderLinks();
+  } else if (drag.kind === 'colw') {
+    const el = byId(drag.id), n = el && nodes.get(el.id); if (!n) return;
+    const cs = drag.cols, c = drag.c, sum = cs.reduce((a, b) => a + b, 0);
+    const d = clamp((dx / z) / Math.max(1, drag.tw) * sum, 0.3 - cs[c], cs[c + 1] - 0.3);
+    el.cols[c] = +(cs[c] + d).toFixed(3); el.cols[c + 1] = +(cs[c + 1] - d).toFixed(3);
+    n.querySelectorAll('col').forEach((col, i) => { col.style.width = (el.cols[i] / sum * 100).toFixed(3) + '%'; });
+    let at = 0;
+    n.querySelectorAll('.col-grip').forEach((g, i) => { at += el.cols[i]; g.style.left = (at / sum * 100).toFixed(3) + '%'; });
   } else if (drag.kind === 'lmid') {
     const l = linkById(drag.link); if (!l) return;
     const q = toWorld(e.clientX, e.clientY);
@@ -4446,6 +4757,8 @@ function onUp(e, cancelled) {
       if (l) { pushUndo(); links().push(l); scheduleSave(); selectLink(l.id); return; }
     }
     renderLinks(); updateOverlay();
+  } else if (d.kind === 'colw') {
+    if (d.moved) { scheduleSave(); renderLinks(); positionSelTools(); }
   } else if (d.kind === 'lmid') {
     // Redrawing would replace the handle under the pointer, and a double-click needs it to stay.
     if (d.moved) { scheduleSave(); renderLinks(); }
@@ -4509,6 +4822,8 @@ canvas.addEventListener('drop', e => {
 /* ---------- editing ---------- */
 world.addEventListener('focusin', e => {
   const f = e.target.closest && e.target.closest('.f'); if (!f) return;
+  // The toolbar's row, column and tint actions follow the cell being edited.
+  if (f.dataset.field === 'cell') { const [r, c] = f.dataset.i.split(':').map(Number); Object.assign(CELL, { id: f.closest('.el').dataset.id, r, c }); setTimeout(updateSelTools, 0); }
   if (f._fmt) { const r = showTyped(f, null), sel = getSelection(); if (r && sel) { sel.removeAllRanges(); sel.addRange(r); } }
   const id = f.closest('.el').dataset.id;
   if (!(S.multi.size === 1 && S.sel === id)) select(id);
@@ -4549,6 +4864,22 @@ world.addEventListener('keydown', e => {
     return;
   }
   const node = f.closest('.el'), el = byId(node.dataset.id); if (!el) return;
+  // A table: Tab and Shift+Tab go along the row and on to the next, Enter goes down; past the
+  // last row, a new one.
+  if (f.dataset.field === 'cell' && (e.key === 'Tab' || (e.key === 'Enter' && !e.isComposing))) {
+    e.preventDefault(); updateFieldModel(f);
+    const [r, c] = f.dataset.i.split(':').map(Number), n = el.cells[0].length;
+    let nr = r, nc = c;
+    if (e.key === 'Enter') nr = r + 1;
+    else { nc = c + (e.shiftKey ? -1 : 1); if (nc >= n) { nc = 0; nr++; } if (nc < 0) { nc = n - 1; nr--; } }
+    if (nr < 0) return;
+    if (nr >= el.cells.length) {
+      if (el.cells.length >= TBL.rows) { f.blur(); return; }
+      el.cells.push(Array(n).fill('')); rerender(el); scheduleSave();
+    }
+    focusField(el.id, 'cell', nr + ':' + nc);
+    return;
+  }
   const rows = f.dataset.field === 'item' ? el.items : f.dataset.field === 'line' ? el.lines : null;
   if (rows) {
     const i = +f.dataset.i, fieldName = f.dataset.field;
@@ -4582,7 +4913,9 @@ world.addEventListener('click', e => {
   } else if (b.classList.contains('add-line')) {
     pushUndo(); el.lines.push({ text: '' });
     rerender(el); focusField(el.id, 'line', el.lines.length - 1); scheduleSave();
-  } else if (b.classList.contains('add-item')) {
+  } else if (b.classList.contains('add-row')) tableOp(el, 'addRow', true);
+  else if (b.classList.contains('add-col')) tableOp(el, 'addCol', true);
+  else if (b.classList.contains('add-item')) {
     pushUndo(); el.items.push({ text: '', done: false });
     rerender(el); focusField(el.id, 'item', el.items.length - 1); scheduleSave();
   }
@@ -4663,7 +4996,13 @@ $('#b-image').addEventListener('click', () => { exitPen(); filePick.click(); });
 $('#b-draw').addEventListener('click', () => { if (S.pen) exitPen(); else enterPen(); });
 $('#b-undo').addEventListener('click', undo);
 $('#b-redo').addEventListener('click', redo);
-$('#b-tidy').addEventListener('click', () => { if (!els().length) { toast('Nothing to tidy yet'); return; } tidy(true); });
+// Tidy fixes what overlaps or is cut off first, keeping the layout; with nothing to fix, it
+// rearranges the board into columns.
+$('#b-tidy').addEventListener('click', () => { if (!els().length) { toast('Nothing to tidy yet'); return; } showIssues(false); if (!fixLayout()) tidy(true); });
+$('#b-tidy').addEventListener('pointerenter', () => showIssues(true));
+$('#b-tidy').addEventListener('pointerleave', () => showIssues(false));
+$('#b-tidy').addEventListener('focus', () => showIssues(true));
+$('#b-tidy').addEventListener('blur', () => showIssues(false));
 $('#b-glance').addEventListener('click', () => { exitPen(); enterGlance(); });
 $('#b-float').addEventListener('click', () => { exitPen(); toggleFloat(); });
 $('#g-float').addEventListener('click', () => toggleFloat());

@@ -102,7 +102,9 @@ What you can do on it:
 
 | Action | How |
 | --- | --- |
-| Add something | Dock at the bottom: note, text, card, person, checklist, shape, arrow, section, image, chart, number. Or double-click empty canvas for a note |
+| Add something | Dock at the bottom: note, text, card, person, checklist, table, shape, arrow, section, image, chart, number. Or double-click empty canvas for a note |
+| Tables | For comparing things point by point. The first row is the header. Tab and Shift+Tab move along the cells and Enter moves down; past the last cell, a new row. The toolbar adds or deletes the row or column of the cell you were in, and tints that cell. Drag the line between two columns to change their widths. Numbers line up on the right, with their header |
+| Comments | Comment in an item's toolbar pins a comment to it. With Claude, a comment is a request: Send N comments (top bar), or Send to Claude on one, and Claude changes only what each is pinned to, framing what it's working on and saying what it did for each. Changed items flash; the pin turns to a tick. Without Claude, comments are notes to yourself. Resolve or Clear removes one |
 | Sections | A titled area behind what it holds. Select some things and choose Put in a section (it makes room rather than cover anything), or add an empty one from the dock. Drag it by its name and everything in it comes along; drag a card in or out to add or remove it. Dragging inside a section selects what's in it. Copy and duplicate take its contents; Delete removes only the section. Tidy keeps each section's inside arrangement |
 | Format text | In notes, text, shapes, card lines and checklist items: \*\*bold\*\* (⌘B), \*italic\* (⌘I), \`code\` and \[a link\](https://…); in notes and text, lines starting "- " or "1. " become lists. It shows formatted, and turns back into what you typed while you edit it. ⌘-click a link to open it; in Glance and Float a click does |
 | Images | Paste one (⌘V), drop files onto the canvas, or use Image in the dock. Big images are scaled to 1800px; corners keep the proportions (Shift frees them) |
@@ -114,6 +116,7 @@ What you can do on it:
 | Arrow routes | New arrows run in right angles between the sides that face each other, and go around cards in the way (a U round the outside if they must). The toolbar switches an arrow to straight or curved. Drag the middle leg of a right-angle arrow to move its bend; double-click it to let the arrow route itself again. Arrows drawn before routes existed stay straight |
 | Label an arrow | Double-click it, press Enter with it selected, or use Label in its toolbar. Enter saves, Esc cancels, an empty label removes it |
 | Arrange | With several selected: align edges or centers, space evenly, bring to front or send to back |
+| Tidy | When things overlap or words are cut off, Tidy shows how many (hover it to see which) and fixes them first, worst first, with the smallest moves. With nothing to fix, it rearranges the board into columns |
 | Group | ⌘G (or Group in the toolbar) makes the selection one item: clicking any member picks up the whole group, and it moves, aligns, copies and tidies as a block. Double-click a member to work on it alone, Esc to step back out. ⌘⇧G ungroups |
 | Rotate | Drag the round handle above what's selected, or ⌘-drag a corner handle. It catches at 0°, 45° and 90°; Shift turns in 15° steps. Several items or a group turn around their shared center. Straighten resets the tilt |
 | Copy | ⌘C / ⌘X / ⌘V, ⌘D to duplicate. Pasted text becomes a note |
