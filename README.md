@@ -102,13 +102,16 @@ What you can do on it:
 
 | Action | How |
 | --- | --- |
-| Add something | Dock at the bottom: note, text, card, person, checklist, shape, arrow, image, chart, number. Or double-click empty canvas for a note |
+| Add something | Dock at the bottom: note, text, card, person, checklist, shape, arrow, section, image, chart, number. Or double-click empty canvas for a note |
+| Sections | A titled area behind what it holds. Select some things and choose Put in a section (it makes room rather than cover anything), or add an empty one from the dock. Drag it by its name and everything in it comes along; drag a card in or out to add or remove it. Dragging inside a section selects what's in it. Copy and duplicate take its contents; Delete removes only the section. Tidy keeps each section's inside arrangement |
+| Format text | In notes, text, shapes, card lines and checklist items: \*\*bold\*\* (⌘B), \*italic\* (⌘I), \`code\` and \[a link\](https://…); in notes and text, lines starting "- " or "1. " become lists. It shows formatted, and turns back into what you typed while you edit it. ⌘-click a link to open it; in Glance and Float a click does |
 | Images | Paste one (⌘V), drop files onto the canvas, or use Image in the dock. Big images are scaled to 1800px; corners keep the proportions (Shift frees them) |
 | Draw | Draw in the dock: pen, highlighter and eraser (P / H / E), six ink colors, three widths. Strokes drawn close together become one drawing you can move, resize and recolor. Esc or Done to stop |
 | Select several | Drag across empty canvas, or Shift-click. ⌘A selects everything |
 | Move, line up | Drag. Edges and centers snap to nearby items; hold Option/Alt to place freely. Arrow keys nudge (Shift for 10px) |
 | Resize | Eight handles on whatever's selected; hold Shift on a corner to keep the proportions |
 | Connect | Drag from a dot beside the selected item onto another, or add an arrow and drop its ends on things. Arrows follow when you move |
+| Arrow routes | New arrows run in right angles between the sides that face each other, and go around cards in the way (a U round the outside if they must). The toolbar switches an arrow to straight or curved. Drag the middle leg of a right-angle arrow to move its bend; double-click it to let the arrow route itself again. Arrows drawn before routes existed stay straight |
 | Label an arrow | Double-click it, press Enter with it selected, or use Label in its toolbar. Enter saves, Esc cancels, an empty label removes it |
 | Arrange | With several selected: align edges or centers, space evenly, bring to front or send to back |
 | Group | ⌘G (or Group in the toolbar) makes the selection one item: clicking any member picks up the whole group, and it moves, aligns, copies and tidies as a block. Double-click a member to work on it alone, Esc to step back out. ⌘⇧G ungroups |
