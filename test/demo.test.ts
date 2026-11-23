@@ -7,7 +7,8 @@ import { commit, propose } from '../src/memory/extract.ts';
 import { syncCalendar } from '../src/memory/calendar.ts';
 import { packetFor } from '../src/memory/packet.ts';
 import { todayModel } from '../src/memory/today.ts';
-import { granolaToDoc } from '../src/memory/granola.ts';
+import { notesToDoc } from '../src/memory/notes.ts';
+import granola, { granolaNotes } from '../connectors/granola.ts';
 import { buildBoard } from '../src/engine.ts';
 import { checkBoard } from '../src/check.ts';
 import type { Memory } from '../src/memory/types.ts';
@@ -75,7 +76,7 @@ test('what arrives while exploring reads cleanly too, in the order the guide sug
   };
   // The Granola import of the call with Maya.
   const note = world.granola.find(n => n.id === 'not_DemoMayaCall01')!;
-  const gdoc = granolaToDoc(note);
+  const gdoc = notesToDoc(granola, granolaNotes(note));
   assert.ok(gdoc.text.includes(world.known.find(k => k.doc.id === 'demo-maya-call')!.doc.text), 'the stand-in recognises the Granola note by its notes');
   const ideal = demoAnswer(gdoc.text, NOW)!;
   const gp = propose(m, gdoc, ideal);

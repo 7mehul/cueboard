@@ -42,7 +42,7 @@ npx cueboard                     # http://localhost:5180
 ```
 
 It all runs on your computer, in two parts: the board is a page in your browser, and the terminal
-window running `cueboard` holds your keys and makes the calls to Claude, Granola and your calendar,
+window running `cueboard` holds your keys and makes the calls to Claude, your notes app and your calendar,
 so the page never sees a key. It runs while that window is open; Ctrl+C stops it, and your boards
 stay in the browser.
 
@@ -72,7 +72,8 @@ It rebuilds the page as you edit; [CONTRIBUTING.md](CONTRIBUTING.md) has the res
 | Paste: invites, email threads, notes, transcripts | Built. The current version not yet tried with real Claude | Claude, to read them. Paste several at once, or drop text files; each piece is sorted and dated |
 | Granola notes | Built. Not yet tried with a real Granola account | A Granola Business plan API key |
 | Your profile and goals | Works | Fill in "About you" once |
-| Other notetakers (Fireflies, Fathom), Gmail, CRMs | Planned | |
+| Other notes apps (Fireflies, Fathom, tl;dv…) | Not yet: [add one](CONNECTORS.md). It's one file and its test | |
+| Gmail, CRMs | Planned | |
 
 "Built" means tested here with sample data or the stand-in model. If you try one for real, an
 issue saying whether it worked helps.
@@ -254,15 +255,18 @@ paste ─▶ read (model) ─▶ check (code) ─▶ review (you) ─▶ memory 
   another: each paste is kept apart, and `src/memory/split.ts` works out what each piece is and
   its date (shown, and correctable, before anything is read). Check what it found, save, get the
   board. After the call, Add notes on the board, or Add what happened on Today.
-- Notes already in Granola come in the same way: Import from Granola (on Today, and in the boards
-  menu) lists the last 60 days, you pick the meetings worth remembering, and each note is read and
-  checked like a paste. `src/memory/granola.ts` turns a note into one document: your notes, then
-  Granola's summary (labelled as written by Granola's AI, so quotes come from your notes or the
-  transcript where possible), then the transcript with you as "Me". Every record keeps a link back
-  to the note in Granola, shown in Float's sources. It needs a Granola API key (Business plan:
-  Settings → Connectors → API keys) set as `GRANOLA_API_KEY` in Cueboard's settings; the key stays
-  in the Cueboard app on your computer, never in the page. `--fake-granola` serves two sample notes from `scenarios/granola.ts`; it hasn't
-been tried against a real Granola account yet.
+- Notes already in a notes app come in the same way: Import meeting notes (on Today, and in the
+  boards menu) lists the last 60 days, you pick the meetings worth remembering, and each note is
+  read and checked like a paste. Each app is a connector in `connectors/`, one file that turns the
+  app's API into one shape ([CONNECTORS.md](CONNECTORS.md) shows how to add one). From there it's
+  shared: `src/memory/notes.ts` turns a note into one document: your notes, then the app's summary
+  (labelled as written by its AI, so quotes come from your notes or the transcript where
+  possible), then the transcript with you as "Me". Every record keeps a link back to the note in
+  the app, shown in Float's sources. Granola is the first: it needs a Granola API key (Business
+  plan: Settings → Connectors → API keys) set as `GRANOLA_API_KEY` in Cueboard's settings. Keys
+  stay in the Cueboard app on your computer, never in the page, and each connector can only send
+  its key to the hosts it lists. `--fake-granola` serves two sample notes from
+  `scenarios/granola.ts`; Granola hasn't been tried with a real account yet.
 - Reading needs Claude, and so does the Assistant panel. The Cueboard app on your computer makes
   the calls, so the key never reaches the page, and it only answers the page it serves.
   `--fake-model` (which `npx cueboard demo` uses) answers for the sample documents in
@@ -276,7 +280,7 @@ node scripts/eval-extract.ts --verbose     # a real model reads the six sample d
 ## Run it
 
 ```bash
-npm test                                   # 160 tests: behaviour, the plan, calendar links and invites, research, the checker catching each broken rule, the judgment layer, memory, Today, Granola, calendar, refresh, the demo week, the server and its password
+npm test                                   # 172 tests: behaviour, the plan, calendar links and invites, research, the checker catching each broken rule, the judgment layer, memory, Today, notes connectors, calendar, refresh, the demo week, the server and its password
 node scripts/show.ts followup              # print a board as text (first | followup | seed:<n>)
 node scripts/scale.ts --n 1000000          # generate, build and check a million boards
 node scripts/scale.ts --n 200000 --edge 0.5   # same, with planted problems in half the packets
@@ -463,7 +467,8 @@ What to know:
 | `src/memory/packet.ts` | A meeting's packet, as memory seen from that meeting |
 | `src/memory/split.ts` | One paste into several documents: where each starts, what it is, when it's from |
 | `src/memory/today.ts` | What Today shows: meetings by day, board status, changes since last time, what's owed |
-| `src/memory/granola.ts` | A Granola note (from its public API) as one document to read into memory |
+| `src/memory/notes.ts` | Meeting notes from any notes app, as one document to read into memory |
+| `connectors/` | One file per notes app (`granola.ts`), what they share (`kit.ts`), how to test one (`testing.ts`), and an example to copy ([CONNECTORS.md](CONNECTORS.md)) |
 | `src/memory/calendar.ts` | Calendar events into memory; a board's fingerprint; which boards to draft or refresh |
 | `src/refresh.ts` | Bringing a drafted board up to date while keeping everything the user did |
 | `scripts/google.ts` | Google sign-in, the sealed grant, reading events |
@@ -475,7 +480,7 @@ What to know:
 | `app/board.js`, `app/board.css`, `app/index.html` | The freeform canvas (from the prototype, extended) |
 | `app/float.css` | The floating in-call window (its code is the float section of `board.js`) |
 | `app/engine-entry.ts` | What the canvas gets from the engine: sample meetings and `boardFor()` |
-| `scripts/serve.ts` | The local app (what `npm start` and `npx cueboard` run): the page, model calls, Granola, the calendar, and the password when there is one |
+| `scripts/serve.ts` | The local app (what `npm start` and `npx cueboard` run): the page, model calls, notes apps, the calendar, and the password when there is one |
 | `scripts/cli.ts` | The `cueboard` command: `demo`, a port, settings and its key file in `~/.cueboard` |
 | `scripts/build-package.ts`, `scripts/check-package.sh` | The npm package: the local app bundled into one file with nothing to install, and a check that runs it from a fresh install |
 | `scripts/auth.ts` | The password: sessions, the limit on guesses, the sign-in page |
@@ -509,7 +514,7 @@ Tried:
 - `npx cueboard`: packed, installed in a fresh folder and run there with no key and an empty home
   folder, on every push (`scripts/check-package.sh`); the demo week drafting its boards in a browser.
 - The Docker image, built and checked on every push (`scripts/check-image.sh`, Intel/AMD).
-- 160 tests, and the checker over a million generated boards.
+- 172 tests, and the checker over a million generated boards.
 
 Not yet tried:
 

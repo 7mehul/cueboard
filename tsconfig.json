@@ -11,5 +11,5 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["src", "synth", "test", "scripts", "app", "scenarios"]
+  "include": ["src", "synth", "test", "scripts", "app", "scenarios", "connectors"]
 }

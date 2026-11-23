@@ -3,7 +3,7 @@
 // for the page with the credentials in its own environment, so no key ever reaches the browser.
 // Usage: node scripts/serve.ts [port] [--demo] [--fake-model] [--fake-granola] [--fake-calendar] [--no-watch]
 //   With ANTHROPIC_API_KEY (or an `ant auth login` sign-in) the page gets Claude (CUE_MODEL to pick).
-//   With GRANOLA_API_KEY set, the page can bring in Granola notes (read-only).
+//   With a notes app's key set (GRANOLA_API_KEY; see CONNECTORS.md), the page can bring in its notes.
 //   With GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET set, you can sign in to Google Calendar.
 //   --fake-model answers for the sample documents only; --fake-granola serves two sample notes;
 //   --fake-calendar serves a sample week of meetings and connects without Google.
@@ -29,9 +29,13 @@ import { Limiter, MIN_PASSWORD, SESSION_DAYS, clientAddress, cookie, passwordMat
 import { GoogleError, authUrl, exchangeCode, listEvents, refreshAccess, revoke, sealer } from './google.ts';
 import { LinkError, fetchFeed } from './calendar-link.ts';
 import { parseIcs } from '../src/memory/ics.ts';
+import { NOTES_APPS } from '../connectors/index.ts';
+import { NotesProblem, cleanList, cleanNotes, connectorContext, idMatches, problemFor, sampleConnector } from '../connectors/kit.ts';
+import { granolaNotes } from '../connectors/granola.ts';
 
 // A setting left empty (a copied .env.example) counts as not set.
-for (const k of Object.keys(process.env)) if (/^(CUE_|ANTHROPIC_|GOOGLE_|GRANOLA_|PORT$)/.test(k) && !process.env[k]?.trim()) delete process.env[k];
+const notesSettings = new Set(NOTES_APPS.flatMap(c => c.env));
+for (const k of Object.keys(process.env)) if ((/^(CUE_|ANTHROPIC_|GOOGLE_|PORT$)/.test(k) || notesSettings.has(k)) && !process.env[k]?.trim()) delete process.env[k];
 
 const args = process.argv.slice(2);
 const argPort = Number(args.find(a => /^\d+$/.test(a)));
@@ -61,14 +65,16 @@ else if (process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN || pr
   llm = (await import('../src/intel/providers/claude.ts')).claude();
 }
 
-// Granola, read-only, with a personal API key from Granola's Settings → Connectors → API keys.
-const GRANOLA = 'https://public-api.granola.ai/v1';
-const granolaKey = process.env.GRANOLA_API_KEY;
+// Notes apps (connectors/), read-only, each with its own key from this machine's settings. In the
+// demo week, or with --fake-granola, Granola answers from sample notes instead (dated from today
+// when they're the demo's).
 const demo = args.includes('--demo') ? await import('../scenarios/demo.ts') : null;
 const sampleNotes = args.includes('--fake-granola') ? (await import('../scenarios/granola.ts')).GRANOLA_NOTES : null;
-// Sample notes, dated from today when they're the demo's.
-const fakeNotes = () => (demo ? demo.demoWorld(new Date()).granola : sampleNotes);
-const fakeGranola = !!(demo || sampleNotes);
+const fakeGranola = demo || sampleNotes ? () => (demo ? demo.demoWorld(new Date()).granola : sampleNotes!).map(granolaNotes) : null;
+const notesApps = NOTES_APPS.map(c => {
+  const fake = c.id === 'granola' ? fakeGranola : null;
+  return { c: fake ? sampleConnector(c, fake) : c, fake: !!fake, on: !!fake || c.env.every(k => process.env[k]) };
+});
 
 // Google Calendar, read-only. The grant is sealed into a cookie with a key this server keeps in its
 // data folder (never committed), so restarting keeps you connected and signed in.
@@ -181,70 +187,45 @@ async function chatApi(req: IncomingMessage, res: ServerResponse) {
   }
 }
 
-// Granola's API, waiting and retrying when it asks us to slow down.
-async function granolaGet(path: string): Promise<{ status: number; body: any }> {
-  for (let attempt = 0; attempt < 4; attempt++) {
-    const r = await fetch(GRANOLA + path, { headers: { authorization: `Bearer ${granolaKey}` }, signal: AbortSignal.timeout(25_000) });
-    if (r.status === 429) { await new Promise(ok => setTimeout(ok, (Number(r.headers.get('retry-after')) || attempt + 1) * 1000)); continue; }
-    return { status: r.status, body: await r.json().catch(() => null) };
-  }
-  return { status: 429, body: null };
-}
-const granolaError = (status: number) =>
-  status === 401 || status === 403 ? { code: 'unauthorized', message: 'Granola didn’t accept the API key. Check GRANOLA_API_KEY.' }
-    : status === 404 ? { code: 'not_ready', message: 'Granola has no finished notes for this meeting yet.' }
-      : status === 429 ? { code: 'rate_limited', message: 'Granola asked us to slow down. Try again in a minute.' }
-        : { code: 'other', message: `Granola answered ${status}.` };
-
-async function granolaApi(req: IncomingMessage, res: ServerResponse, path: string, query: URLSearchParams) {
+// The notes apps. The page lists which there are and which are set up, lists a page of notes from
+// one, and fetches one note. The connector does the talking to its app; what it sends back is
+// checked before the page sees it (connectors/kit.ts).
+async function notesApi(req: IncomingMessage, res: ServerResponse, path: string, query: URLSearchParams) {
   if (!allowed(req)) { notAllowed(res); return; }
   if (req.method !== 'GET') { send(res, 405, { error: { code: 'other', message: 'Read-only' } }); return; }
-  if (path === '/api/granola') { send(res, 200, { available: !!(granolaKey || fakeGranola), ...(fakeGranola ? { fake: true } : {}) }); return; }
-  if (!granolaKey && !fakeGranola) { send(res, 503, { error: { code: 'unavailable', message: 'Start Cueboard with GRANOLA_API_KEY set to bring in Granola notes.' } }); return; }
+  if (path === '/api/notes') {
+    send(res, 200, { sources: notesApps.map(({ c, on, fake }) => ({ id: c.id, name: c.name, available: on, ...(fake ? { fake: true } : {}), env: c.env, setup: c.setup })) });
+    return;
+  }
+  const m = /^\/api\/notes\/([a-z0-9-]+)(?:\/([^/]+))?$/.exec(path);
+  const app = m && notesApps.find(a => a.c.id === m[1]);
+  if (!m || !app) { send(res, 404, { error: { code: 'other', message: 'No such notes app' } }); return; }
+  const { c } = app;
+  if (!app.on) { send(res, 503, { error: { code: 'unavailable', message: `Add ${c.env.join(' and ')} to Cueboard’s settings to bring in ${c.name} notes.` } }); return; }
+  const ctx = connectorContext(c, process.env);
   try {
-    if (path === '/api/granola/notes') {
+    if (!m[2]) {
       const after = query.get('after') ?? '';
       const cursor = (query.get('cursor') ?? '').slice(0, 500);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(after)) { send(res, 400, { error: { code: 'other', message: 'after must be a date' } }); return; }
-      if (fakeGranola) {
-        const notes = fakeNotes()!.filter(n => n.created_at.slice(0, 10) >= after).map(n => ({ id: n.id, title: n.title, created_at: n.created_at }));
-        send(res, 200, { notes, hasMore: false, cursor: null }); return;
-      }
-      const r = await granolaGet(`/notes?created_after=${after}&page_size=30${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
-      if (r.status !== 200 || !r.body) { send(res, 502, { error: granolaError(r.status) }); return; }
-      const notes = (r.body.notes ?? []).filter((n: { deleted_at?: string | null }) => !n.deleted_at)
-        .map((n: { id: string; title: string | null; created_at: string }) => ({ id: n.id, title: n.title, created_at: n.created_at }));
-      console.log(`granola · listed ${notes.length} notes`);
-      send(res, 200, { notes, hasMore: !!r.body.hasMore, cursor: r.body.cursor ?? null }); return;
+      const page = cleanList(c, await c.list(ctx, { after, ...(cursor ? { cursor } : {}) }));
+      console.log(`${c.id} · listed ${page.notes.length} notes`);
+      send(res, 200, page); return;
     }
-    const m = /^\/api\/granola\/notes\/(not_[a-zA-Z0-9]{14})$/.exec(path);
-    if (m) {
-      const id = m[1];
-      if (fakeGranola) { const n = fakeNotes()!.find(x => x.id === id); send(res, n ? 200 : 404, n ?? { error: granolaError(404) }); return; }
-      let r = await granolaGet(`/notes/${id}?include=transcript`);
-      // A transcript too long to send inline comes in pages.
-      if (r.status === 413) {
-        r = await granolaGet(`/notes/${id}`);
-        if (r.status === 200 && r.body) {
-          const items: unknown[] = [];
-          let cursor: string | null = null;
-          for (let page = 0; page < 40; page++) {
-            const t = await granolaGet(`/notes/${id}/transcript?page_size=200${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
-            if (t.status !== 200 || !t.body) break;
-            items.push(...(t.body.transcript ?? []));
-            if (!t.body.hasMore) break;
-            cursor = t.body.cursor;
-          }
-          r.body.transcript = items;
-        }
-      }
-      if (r.status !== 200 || !r.body) { send(res, 502, { error: granolaError(r.status) }); return; }
-      console.log(`granola · fetched ${id}`);
-      send(res, 200, r.body); return;
-    }
-    send(res, 404, { error: { code: 'other', message: 'Unknown Granola route' } });
+    let id = '';
+    try { id = decodeURIComponent(m[2]); } catch { }
+    if (!idMatches(c.noteId, id)) { send(res, 400, { error: { code: 'other', message: `That isn’t a ${c.name} note.` } }); return; }
+    const notes = cleanNotes(c, await c.fetch(ctx, id));
+    console.log(`${c.id} · fetched ${id}`);
+    send(res, 200, notes);
   } catch (e) {
-    send(res, 502, { error: { code: 'unavailable', message: `Couldn’t reach Granola: ${(e as Error).message}` } });
+    if (e instanceof NotesProblem) {
+      console.error(`${c.id} · the connector sent something Cueboard can’t use: ${e.message}`);
+      send(res, 502, { error: { code: 'other', message: `${c.name} sent a note Cueboard couldn’t read.` } }); return;
+    }
+    const p = problemFor(c, e);
+    console.log(`${c.id} · ${p.code}: ${p.message}`);
+    send(res, p.status, { error: { code: p.code, message: p.message } });
   }
 }
 
@@ -425,7 +406,7 @@ async function route(req: IncomingMessage, res: ServerResponse) {
   }
   if (path === '/api/llm') { await api(req, res); return; }
   if (path === '/api/chat') { await chatApi(req, res); return; }
-  if (path === '/api/granola' || path.startsWith('/api/granola/')) { await granolaApi(req, res, path, url.searchParams); return; }
+  if (path === '/api/notes' || path.startsWith('/api/notes/')) { await notesApi(req, res, path, url.searchParams); return; }
   if (path === '/api/calendar' || path.startsWith('/api/calendar/')) { await calendarApi(req, res, path); return; }
   if (path === '/api/demo') {
     if (!demo) { send(res, 404, { error: { code: 'other', message: 'Start Cueboard with --demo for the demo week' } }); return; }
@@ -457,5 +438,5 @@ createServer(async (req, res) => {
   }
 }).listen(port, host, () => {
   const where = locked ? `serving on ${host}:${port}, behind its password` : `serving http://localhost:${port}`;
-  console.log(`${where}${demo ? ' · the demo week' : ''} · model: ${llm ? llm.name : 'none (rules only; run `ant auth login` or set ANTHROPIC_API_KEY for Claude)'} · Granola: ${fakeGranola ? 'sample notes' : granolaKey ? 'connected' : 'off (set GRANOLA_API_KEY)'} · calendar: ${fakeCalendar ? 'sample week' : calendarOn ? 'links and Google' : 'links (set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET for Google sign-in)'}`);
+  console.log(`${where}${demo ? ' · the demo week' : ''} · model: ${llm ? llm.name : 'none (rules only; run `ant auth login` or set ANTHROPIC_API_KEY for Claude)'} · notes: ${notesApps.filter(a => a.on).map(a => a.c.name + (a.fake ? ' (sample notes)' : '')).join(', ') || 'none connected'} · calendar: ${fakeCalendar ? 'sample week' : calendarOn ? 'links and Google' : 'links (set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET for Google sign-in)'}`);
 });

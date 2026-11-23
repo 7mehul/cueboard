@@ -13,10 +13,12 @@ Useful to include: what you found, how to reproduce it, and what someone could d
 ## What's in scope
 
 - The server (`scripts/serve.ts`): it should only answer the page it serves, and keys
-  (Anthropic, Google, Granola) should never reach the browser. Without a password it should answer
+  (Anthropic, Google, notes apps) should never reach the browser. Without a password it should answer
   only its own machine.
 - The password for self-hosted servers (`CUE_PASSWORD`, `scripts/auth.ts`): sessions, the limit on
   guesses, and that nothing but `/healthz` and the sign-in page is reachable without it.
+- Notes connectors (`connectors/`): each should send its key only to the hosts it lists
+  (`connectors/kit.ts` enforces this), and only read.
 - Calendar links: the server fetches the link a user gives it, so it must never reach a private or
   internal address (`scripts/calendar-link.ts`).
 - Anything that lets one person's memory, boards or documents reach another person or a model

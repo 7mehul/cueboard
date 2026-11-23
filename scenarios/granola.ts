@@ -1,4 +1,4 @@
-import type { GranolaNote } from '../src/memory/granola.ts';
+import type { GranolaNote } from '../connectors/granola.ts';
 import { STORY } from './docs.ts';
 
 // Two notes as Granola's API returns them, for tests and `serve.ts --fake-granola`. The first is

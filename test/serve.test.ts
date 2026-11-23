@@ -7,6 +7,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { NOTES_APPS } from '../connectors/index.ts';
 
 // The server as attackers would meet it: real processes on spare ports, raw requests where a
 // browser or fetch would tidy the request up first. Each case was a crash or a leak once.
@@ -20,8 +21,10 @@ after(() => { for (const s of servers) s.kill(); for (const d of [DIST, DATA]) r
 // A port the system says is free.
 const freePort = () => new Promise<number>(ok => { const s = createServer(); s.listen(0, '127.0.0.1', () => { const p = (s.address() as { port: number }).port; s.close(() => ok(p)); }); });
 
-// Whatever this terminal has set doesn't leak into the servers under test.
-const clean = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(CUE_|PORT$)/.test(k)));
+// Whatever this terminal has set doesn't leak into the servers under test: no notes app is
+// reached for real.
+const notesKeys = new Set(NOTES_APPS.flatMap(c => c.env));
+const clean = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(CUE_|PORT$)/.test(k) && !notesKeys.has(k)));
 
 async function start(port: number, args: string[], env: Record<string, string> = {}) {
   const p = spawn(process.execPath, ['scripts/serve.ts', String(port), '--fake-model', '--no-watch', ...args], { env: { ...clean, CUE_DIST: DIST, CUE_DATA_DIR: DATA, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -48,7 +51,7 @@ function raw(port: number, text: string, { hangUp = false } = {}): Promise<strin
 const get = (port: number, path: string, headers = '') => raw(port, `GET ${path} HTTP/1.1\r\nHost: localhost:${port}\r\n${headers}Connection: close\r\n\r\n`);
 const alive = async (port: number) => (await get(port, '/healthz-or-page')).length > 0 && (await fetch(`http://localhost:${port}/`)).status === 200;
 
-const LOCAL = await freePort(), LOCKED = await freePort();
+const LOCAL = await freePort(), LOCKED = await freePort(), NOTES = await freePort();
 const PASSWORD = randomBytes(15).toString('base64url');
 
 test('local server: nothing on disk but the app, and bad requests are answered, not fatal', async () => {
@@ -75,6 +78,31 @@ test('local server: only this machine’s own name, and only real step names', a
   assert.equal(r.status, 400, 'unknown effort');
 });
 
+test('notes apps: what each needs, a page of notes, one note at a time, ids checked before any call', async () => {
+  const at = (port: number, path: string, init: RequestInit = {}) => fetch(`http://localhost:${port}${path}`, { ...init, headers: { 'x-cueboard': '1', ...(init.headers as Record<string, string>) } });
+  // Not set up: the page is told what to set, and nothing is called.
+  const off = await (await at(LOCAL, '/api/notes')).json();
+  assert.deepEqual(off.sources.find((s: { id: string }) => s.id === 'granola'), { id: 'granola', name: 'Granola', available: false, env: ['GRANOLA_API_KEY'], setup: NOTES_APPS[0].setup });
+  const r = await at(LOCAL, '/api/notes/granola?after=2026-01-01');
+  assert.equal(r.status, 503);
+  assert.match((await r.json()).error.message, /Add GRANOLA_API_KEY to Cueboard’s settings/);
+
+  await start(NOTES, ['--fake-granola']);
+  assert.equal((await (await at(NOTES, '/api/notes')).json()).sources[0].fake, true);
+  const list = await (await at(NOTES, '/api/notes/granola?after=2026-01-01')).json();
+  assert.deepEqual(list.notes.map((n: { id: string }) => n.id), ['not_WeeklyTeam0001', 'not_LarkspurCall01'], 'newest first');
+  assert.equal(list.cursor, null);
+  const note = await (await at(NOTES, '/api/notes/granola/' + encodeURIComponent('not_LarkspurCall01'))).json();
+  assert.equal(note.me.email, 'alex@cueboard.example');
+  assert.equal(note.people.length, 2);
+  for (const bad of ['..%2F..%2Fetc%2Fpasswd', 'not_short', '%E0%A4%A']) assert.equal((await at(NOTES, '/api/notes/granola/' + bad)).status, 400, bad);
+  assert.equal((await at(NOTES, '/api/notes/granola?after=yesterday')).status, 400);
+  assert.equal((await at(NOTES, '/api/notes/nope?after=2026-01-01')).status, 404);
+  assert.equal((await at(NOTES, '/api/notes/granola/not_Missing0000001')).status, 404);
+  assert.equal((await at(NOTES, '/api/notes/granola?after=2026-01-01', { method: 'POST' })).status, 405);
+  assert.equal((await fetch(`http://localhost:${NOTES}/api/notes`)).status, 403, 'only from the page');
+});
+
 test('a server other machines can reach won’t start without a good password', async () => {
   const exits = (env: Record<string, string>) => new Promise<string>(ok => {
     const p = spawn(process.execPath, ['scripts/serve.ts', '0', '--fake-model', '--no-watch'], { env: { ...clean, CUE_DIST: DIST, CUE_DATA_DIR: DATA, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -96,7 +124,7 @@ test('with a password: nothing without it, guesses are limited by the address th
   assert.match(front, /type="password"/);
   assert.doesNotMatch(front, /board\.js|Load the demo week/);
   assert.equal((await call('/api/llm')).status, 401);
-  assert.equal((await call('/api/granola/notes?after=2026-01-01')).status, 401);
+  assert.equal((await call('/api/notes/granola?after=2026-01-01')).status, 401);
   assert.equal((await call('/cueboard.html')).status, 302);
   assert.equal((await fetch(`http://localhost:${LOCKED}/healthz`)).status, 200, 'health checks need no password');
 

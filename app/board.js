@@ -1824,7 +1824,7 @@ function openMenu(mode) {
     menu.append(h('button', { class: 'menu-item', type: 'button', role: 'menuitem', onclick: () => { closeMenu(); newBoard(); } }, ic('plus'), h('span', { class: 'mi-main' }, h('span', { class: 'mi-title', text: 'New blank board' }))));
     if (Engine && Engine.todayModel) menu.append(h('button', { class: 'menu-item', type: 'button', role: 'menuitem', onclick: () => openToday() }, ic('calendar'), h('span', { class: 'mi-main' }, h('span', { class: 'mi-title', text: 'Today' }), h('span', { class: 'mi-sub', text: 'Your meetings and what’s ready' }))));
     if (DEMO.on) menu.append(h('button', { class: 'menu-item', type: 'button', role: 'menuitem', onclick: () => openDemo() }, ic('spark'), h('span', { class: 'mi-main' }, h('span', { class: 'mi-title', text: 'Load the demo week…' }), h('span', { class: 'mi-sub', text: 'A founder’s week of meetings to explore' }))));
-    if (Engine && Engine.granolaToDoc && granolaOffered()) menu.append(h('button', { class: 'menu-item', type: 'button', role: 'menuitem', onclick: () => openGranolaImport() }, ic('note'), h('span', { class: 'mi-main' }, h('span', { class: 'mi-title', text: 'Import from Granola…' }), h('span', { class: 'mi-sub', text: 'Your past meeting notes, into memory' }))));
+    if (Engine && Engine.notesToDoc && notesOffered()) menu.append(h('button', { class: 'menu-item', type: 'button', role: 'menuitem', onclick: () => openNotesImport() }, ic('note'), h('span', { class: 'mi-main' }, h('span', { class: 'mi-title', text: 'Import meeting notes…' }), h('span', { class: 'mi-sub', text: `Past meetings from ${notesAppNames()}, into memory` }))));
     if (Engine && Engine.readDocuments) menu.append(h('button', { class: 'menu-item', type: 'button', role: 'menuitem', onclick: () => openSheet('prep') }, ic('note'), h('span', { class: 'mi-main' }, h('span', { class: 'mi-title', text: 'Prep from emails and notes…' }), h('span', { class: 'mi-sub', text: 'Paste the invite, emails, your notes' }))));
     const ahead = Mem.data && Engine && Engine.upcoming ? Engine.upcoming(Mem.data, new Date().toISOString()).filter(m => !Object.values(S.boards).some(b => b.meetingId === m.id)).slice(0, 5) : [];
     if (ahead.length) {
@@ -2170,7 +2170,7 @@ function sheetPaste(note) {
   const status = h('p', { class: 'sh-model' }, 'Checking for a model…');
   const err = h('p', { class: 'sh-err', hidden: !note, text: note || '' });
   memoryModel().then(llm => {
-    status.textContent = llm ? '' : 'Reading needs a model. Run node scripts/serve.ts in a terminal where ANTHROPIC_API_KEY is set, or open the published version in Claude.';
+    status.textContent = llm ? '' : NEEDS_CLAUDE;
     status.hidden = !!llm;
   });
   const go = async () => {
@@ -2510,27 +2510,39 @@ function drawGoalBar() {
     picks.map(t => h('button', { class: 'gb-pick', type: 'button', title: 'Use this as the goal', onclick: () => setMeetingGoal(m.id, t, true) }, t))) : null);
 }
 
-/* ================= Granola import ================= */
-// Notes people already have in Granola come into memory the same way a paste does: each note is
-// read, every item checked against it, and nothing is saved until the person has looked. The
-// local server holds the Granola key; without that server (a published artifact) this is hidden.
-const GR = { status: null };
-const grHeaders = { headers: { 'x-cueboard': '1' } };
-const granolaOffered = () => !!(GR.status && GR.status.server);
-async function granolaStatus() {
-  if (GR.status) return GR.status;
+/* ================= importing notes ================= */
+// Notes people already have in a notes app (Granola, and each connector in connectors/) come into
+// memory the same way a paste does: each note is read, every item checked against it, and nothing
+// is saved until the person has looked. The Cueboard app on the computer holds each app's key;
+// without it (a published artifact) this is hidden.
+const NOTES = { status: null };
+const apiHeaders = { headers: { 'x-cueboard': '1' } };
+const CONNECTORS_URL = SOURCE_URL + '/blob/main/CONNECTORS.md';
+// Whether this page came from the Cueboard app, which answers /api/… (rather than a published copy).
+const serverHere = () => !!(NOTES.status && NOTES.status.server);
+const notesOffered = serverHere;
+const notesApps = () => (NOTES.status && NOTES.status.sources) || [];
+async function notesStatus() {
+  if (NOTES.status) return NOTES.status;
   try {
-    const r = await fetch('/api/granola', grHeaders);
-    GR.status = r.ok ? Object.assign({ server: true }, await r.json()) : { server: false, available: false };
-  } catch (_) { GR.status = { server: false, available: false }; }
+    const r = await fetch('/api/notes', apiHeaders);
+    const b = r.ok ? await r.json().catch(() => null) : null;
+    NOTES.status = b && Array.isArray(b.sources) ? { server: true, sources: b.sources } : { server: false, sources: [] };
+  } catch (_) { NOTES.status = { server: false, sources: [] }; }
   queueToday();
-  return GR.status;
+  return NOTES.status;
+}
+// "Granola", "Granola or Fireflies": the apps that are set up, or all of them while none is.
+function notesAppNames() {
+  const all = notesApps(), on = all.filter(s => s.available);
+  const names = (on.length ? on : all).map(s => s.name);
+  return names.length > 1 ? names.slice(0, -1).join(', ') + ' or ' + names.at(-1) : names[0] || 'your notes app';
 }
 // A Cueboard on a server sits behind a password (CUE_PASSWORD); then the menu offers signing out.
 const SERVER = { locked: false };
 async function sessionStatus() {
   try {
-    const r = await fetch('/api/session', grHeaders);
+    const r = await fetch('/api/session', apiHeaders);
     if (r.ok) SERVER.locked = !!(await r.json()).locked;
   } catch (_) { }
 }
@@ -2540,47 +2552,67 @@ async function signOut() {
   location.reload();
 }
 const isoDay = t => { const d = new Date(t); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+const NEEDS_CLAUDE = 'Reading needs Claude. Run ant auth login, or add ANTHROPIC_API_KEY to Cueboard’s settings, then start Cueboard again.';
 
-async function openGranolaImport() {
-  if (!Engine || !Engine.granolaToDoc) return;
+// One app named: straight to it. None named: the one that's set up, if there's just one;
+// otherwise a choice.
+async function openNotesImport(appId) {
+  if (!Engine || !Engine.notesToDoc) return;
   closeMenu(); blurField(); exitPen();
   await (Mem.ready || (Mem.ready = loadMemory()));
   Mem.llm = undefined;
-  R = { mode: 'import', busy: false, back: granolaPick };
   sheet.hidden = false;
-  // Setup first if there's no key: no point asking about you before Granola can answer.
-  if (!Mem.data.user && (await granolaStatus()).available) { R.afterYou = granolaPick; sheetYou(); return; }
-  granolaPick();
+  const apps = (await notesStatus()).sources, on = apps.filter(s => s.available);
+  const app = apps.find(s => s.id === appId) || (on.length === 1 ? on[0] : apps.length === 1 ? apps[0] : null);
+  const first = app ? () => notesPick(app) : notesChoose;
+  R = { mode: 'import', busy: false, back: first };
+  // About you first, once there's an app to read from: no point asking before it can answer.
+  if (!Mem.data.user && (app ? app.available : on.length)) { R.afterYou = first; sheetYou(); return; }
+  first();
 }
 
-async function granolaPick() {
-  const st = await granolaStatus();
-  if (!st.available) {
-    sheetFrame('Bring in your Granola notes', 'Cueboard reads your notes through Granola’s API, with a key that stays in your terminal.',
-      [h('ol', { class: 'gr-setup' },
-        h('li', {}, 'In Granola, open Settings → Connectors → API keys and create a key. It needs a Business plan.'),
-        h('li', {}, 'Stop Cueboard in your terminal and start it again with the key set:', h('code', { text: 'GRANOLA_API_KEY=grn_… node scripts/serve.ts' })),
-        h('li', {}, 'Reload this page and choose Import from Granola again.'))],
-      [h('button', { class: 'btn primary', type: 'button', onclick: closeSheet }, 'Close')]);
-    return;
-  }
+function notesChoose() {
+  R.back = notesChoose;
+  const rows = notesApps().map(s => h('button', { class: 'rv-row nt-app', type: 'button', onclick: () => notesPick(s) },
+    ic('note'), h('span', { class: 'rv-main' }, h('span', { class: 'rv-text', text: s.name }),
+      h('span', { class: 'rv-meta', text: s.available ? (s.fake ? 'Sample notes' : 'Ready') : 'Needs a key: see how' }))));
+  sheetFrame('Bring in your meeting notes', 'Past meetings from the app you take notes in, read into memory so follow-ups know where you left off.',
+    [h('div', { class: 'gr-list' }, rows),
+      h('p', { class: 'rv-note' }, 'Use another app? ', h('a', { href: CONNECTORS_URL, target: '_blank', rel: 'noopener noreferrer' }, 'Add it to Cueboard'), '.')],
+    [h('button', { class: 'btn', type: 'button', onclick: closeSheet }, 'Close')]);
+}
+
+function notesSetup(app) {
+  const many = notesApps().length > 1;
+  sheetFrame(`Bring in your ${app.name} notes`, `Cueboard reads your notes through ${app.name}’s API, with a key that stays on your computer.`,
+    [h('ol', { class: 'gr-setup' },
+      app.setup.map(t => h('li', { text: t })),
+      h('li', {}, 'Add it to Cueboard’s settings: the file ~/.cueboard/.env, or .env in Cueboard’s folder if you run it from the code or with Docker.', h('code', { text: app.env.map(k => `${k}=…`).join('\n') })),
+      h('li', {}, 'Stop Cueboard and start it again, then reload this page.'))],
+    [many ? h('button', { class: 'btn', type: 'button', onclick: notesChoose }, 'Back') : null, h('button', { class: 'btn primary', type: 'button', onclick: closeSheet }, 'Close')]);
+}
+
+async function notesPick(app) {
+  if (!app.available) { notesSetup(app); return; }
+  R.back = () => notesPick(app);
+  const title = `Bring in your ${app.name} notes`;
   R.busy = true;
-  sheetFrame('Bring in your Granola notes', null, [h('p', { class: 'sh-progress', text: 'Loading your notes from Granola…' })], null);
+  sheetFrame(title, null, [h('p', { class: 'sh-progress', text: `Loading your notes from ${app.name}…` })], null);
   const notes = [];
   let cursor = null, error = null;
   try {
     for (let page = 0; page < 4; page++) {
-      const r = await fetch(`/api/granola/notes?after=${isoDay(Date.now() - 60 * 864e5)}${cursor ? '&cursor=' + encodeURIComponent(cursor) : ''}`, grHeaders);
+      const r = await fetch(`/api/notes/${app.id}?after=${isoDay(Date.now() - 60 * 864e5)}${cursor ? '&cursor=' + encodeURIComponent(cursor) : ''}`, apiHeaders);
       const b = await r.json().catch(() => null);
-      if (!r.ok || !b) { error = (b && b.error && b.error.message) || 'Granola didn’t answer.'; break; }
+      if (!r.ok || !b) { error = (b && b.error && b.error.message) || `${app.name} didn’t answer.`; break; }
       notes.push(...b.notes);
-      if (!b.hasMore || !b.cursor) break;
+      if (!b.cursor) break;
       cursor = b.cursor;
     }
   } catch (_) { error = 'Couldn’t reach Cueboard. Check it’s still running.'; }
   R.busy = false;
-  if (error && !notes.length) { sheetFrame('Bring in your Granola notes', null, [h('p', { class: 'sh-err', text: error })], [h('button', { class: 'btn', type: 'button', onclick: closeSheet }, 'Close')]); return; }
-  notes.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  if (error && !notes.length) { sheetFrame(title, null, [h('p', { class: 'sh-err', text: error })], [h('button', { class: 'btn', type: 'button', onclick: closeSheet }, 'Close')]); return; }
+  notes.sort((a, b) => new Date(b.at) - new Date(a.at));
   const have = new Set(Mem.data.docs.map(d => d.id));
   const recent = Date.now() - 30 * 864e5;
   // Ticked to start with: recent notes that mention someone or some company memory knows, so an
@@ -2591,45 +2623,46 @@ async function granolaPick() {
   let picked = 0;
   const count = h('span');
   const rows = notes.map(n => {
-    const inMemory = have.has('granola-' + n.id);
-    const on = !inMemory && new Date(n.created_at).getTime() > recent && mentionsKnown(n.title) && picked < 8;
+    const inMemory = have.has(`${app.id}-${n.id}`);
+    const on = !inMemory && new Date(n.at).getTime() > recent && mentionsKnown(n.title) && picked < 8;
     if (on) picked++;
     const cb = h('input', { type: 'checkbox', checked: on, 'data-note': n.id });
     cb.addEventListener('change', updateCount);
     return h('label', { class: 'rv-row' }, cb, h('span', { class: 'rv-main' },
       h('span', { class: 'rv-text', text: n.title || 'Untitled meeting' }),
-      h('span', { class: 'rv-meta', text: new Date(n.created_at).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) + (inMemory ? ' · already in memory' : '') })));
+      h('span', { class: 'rv-meta', text: new Date(n.at).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) + (inMemory ? ' · already in memory' : '') })));
   });
-  const readBtn = h('button', { class: 'btn primary', type: 'button', onclick: () => readGranola([...sheet.querySelectorAll('[data-note]')].filter(c => c.checked).map(c => c.dataset.note)) }, ic('spark'), count);
+  const readBtn = h('button', { class: 'btn primary', type: 'button', onclick: () => readNotes(app, [...sheet.querySelectorAll('[data-note]')].filter(c => c.checked).map(c => c.dataset.note)) }, ic('spark'), count);
   function updateCount() { const n = sheet.querySelectorAll('[data-note]:checked').length; count.textContent = n === 1 ? 'Read 1 note' : `Read ${n} notes`; readBtn.disabled = !n; }
-  sheetFrame('Bring in your Granola notes',
+  sheetFrame(title,
     'Pick the meetings worth remembering, usually the ones with people outside your company. The ones ticked mention people you already know. Each is read by the model, 10–20 seconds a note, and nothing is saved until you’ve checked it.',
-    notes.length ? [error ? h('p', { class: 'sh-err', text: error }) : null, h('div', { class: 'gr-list' }, rows)] : [h('p', { class: 'rv-note', text: 'No Granola notes from the last 60 days.' })],
+    notes.length ? [error ? h('p', { class: 'sh-err', text: error }) : null, h('div', { class: 'gr-list' }, rows)] : [h('p', { class: 'rv-note', text: `No ${app.name} notes from the last 60 days.` })],
     [h('button', { class: 'btn', type: 'button', onclick: closeSheet }, 'Cancel'), readBtn]);
   updateCount();
 }
 
-async function readGranola(ids) {
+async function readNotes(app, ids) {
   if (!ids.length) return;
+  const title = `Bring in your ${app.name} notes`;
   const llm = await memoryModel();
-  if (!llm) { sheetFrame('Bring in your Granola notes', null, [h('p', { class: 'sh-err', text: 'Reading needs a model. Start Cueboard with ANTHROPIC_API_KEY set as well.' })], [h('button', { class: 'btn', type: 'button', onclick: closeSheet }, 'Close')]); return; }
+  if (!llm) { sheetFrame(title, null, [h('p', { class: 'sh-err', text: NEEDS_CLAUDE })], [h('button', { class: 'btn', type: 'button', onclick: closeSheet }, 'Close')]); return; }
   R.busy = true;
   const line = h('p', { class: 'sh-progress' });
-  sheetFrame('Fetching from Granola…', null, [line], null);
+  sheetFrame(`Fetching from ${app.name}…`, null, [line], null);
   const docs = [], failed = [];
   for (const [i, id] of ids.entries()) {
     line.textContent = `Fetching ${i + 1} of ${ids.length}`;
     try {
-      const r = await fetch('/api/granola/notes/' + encodeURIComponent(id), grHeaders);
+      const r = await fetch(`/api/notes/${app.id}/${encodeURIComponent(id)}`, apiHeaders);
       const note = await r.json().catch(() => null);
       if (!r.ok || !note) { failed.push((note && note.error && note.error.message) || id); continue; }
-      // Your own Granola account says who "me" is, if About you didn't.
-      if (note.owner && Mem.data.user && !Mem.data.user.email) { Mem.data.user.email = note.owner.email; if (!Mem.data.user.name && note.owner.name) Mem.data.user.name = note.owner.name; }
-      docs.push(Engine.granolaToDoc(note));
+      // Your own account in the app says who "me" is, if About you didn't.
+      if (note.me && Mem.data.user && !Mem.data.user.email) { Mem.data.user.email = note.me.email; if (!Mem.data.user.name && note.me.name) Mem.data.user.name = note.me.name; }
+      docs.push(Engine.notesToDoc(app, note));
     } catch (_) { failed.push(id); }
   }
   R.busy = false;
-  if (!docs.length) { sheetFrame('Bring in your Granola notes', null, [h('p', { class: 'sh-err', text: `Couldn’t fetch those notes: ${failed.join('; ')}` })], [h('button', { class: 'btn', type: 'button', onclick: granolaPick }, 'Back')]); return; }
+  if (!docs.length) { sheetFrame(title, null, [h('p', { class: 'sh-err', text: `Couldn’t fetch those notes: ${failed.join('; ')}` })], [h('button', { class: 'btn', type: 'button', onclick: () => notesPick(app) }, 'Back')]); return; }
   if (failed.length) toast(`${failed.length} ${failed.length === 1 ? 'note' : 'notes'} couldn’t be fetched and were skipped.`);
   R.docs = docs;
   sheetReading(llm);
@@ -2642,7 +2675,7 @@ async function readGranola(ids) {
 // up to date. The server holds no one's calendar: the grant lives in this browser's cookie.
 const CAL = { status: null, busy: false, last: 0, error: null, email: null, draft: '' };
 async function calendarStatus() {
-  try { const r = await fetch('/api/calendar', grHeaders); CAL.status = r.ok ? await r.json() : null; } catch (_) { CAL.status = null; }
+  try { const r = await fetch('/api/calendar', apiHeaders); CAL.status = r.ok ? await r.json() : null; } catch (_) { CAL.status = null; }
   queueToday();
   return CAL.status;
 }
@@ -2651,7 +2684,7 @@ async function syncCalendar(force) {
   if (!force && Date.now() - CAL.last < 4 * 60000) return;
   CAL.busy = true; queueToday();
   try {
-    const r = await fetch('/api/calendar/events?tz=' + encodeURIComponent(myZone()), grHeaders);
+    const r = await fetch('/api/calendar/events?tz=' + encodeURIComponent(myZone()), apiHeaders);
     const b = await r.json().catch(() => null);
     if (!r.ok || !b || !Array.isArray(b.events)) {
       const e = b && b.error;
@@ -2731,7 +2764,7 @@ function calendarCard() {
 // Looking people up on the web is on unless switched off here; it's this browser's choice.
 const researchOn = () => { try { return localStorage.getItem('cueboard.research') !== 'off'; } catch (_) { return true; } };
 function researchCard() {
-  if (!Engine || !Engine.researchMeeting || !(GR.status && GR.status.server)) return null;
+  if (!Engine || !Engine.researchMeeting || !serverHere()) return null;
   const on = researchOn();
   const box = h('input', { type: 'checkbox', id: 'td-research', checked: on });
   box.addEventListener('change', () => { try { localStorage.setItem('cueboard.research', box.checked ? 'on' : 'off'); } catch (_) { } renderToday(); if (box.checked) queuePrep(); });
@@ -2834,7 +2867,7 @@ async function autoPrep() {
 const DEMO = { on: false, samples: [], calendar: {} };
 async function demoStatus() {
   try {
-    const r = await fetch('/api/demo', grHeaders);
+    const r = await fetch('/api/demo', apiHeaders);
     if (!r.ok) return;
     const b = await r.json();
     Object.assign(DEMO, { on: true, samples: b.samples || [], calendar: b.calendar || {} });
@@ -2858,7 +2891,7 @@ function openDemo() {
 }
 async function loadDemo() {
   let b = null;
-  try { const r = await fetch('/api/demo', grHeaders); b = r.ok ? await r.json() : null; } catch (_) { }
+  try { const r = await fetch('/api/demo', apiHeaders); b = r.ok ? await r.json() : null; } catch (_) { }
   if (!b || !b.memory) { toast('Couldn’t load the demo week'); return; }
   await (Mem.ready || (Mem.ready = loadMemory()));
   Mem.data = Engine.reviveMemory(b.memory, 'me');
@@ -2896,7 +2929,7 @@ function demoGuide() {
       step('brightline', 'Open the Brightline board', 'A renewal at risk: the promise you’re late on, seats falling, their price objection and your answer. Hover any line to see where it came from.', 'Open it', () => openMeeting('demo_brightline_renewal')),
       step('sofia', 'New terms arrive before the call', 'Paste Sofia’s email and read it. The Brightline board updates itself and keeps anything you changed.', 'Paste Sofia’s email', () => pasteSample('sofia')),
       step('lena', 'Coffee with Lena just ended', 'Add what happened. What Lena says about Maya ends up on tomorrow’s Larkspur board too.', 'Add the notes', () => { if (lena) openSheet('notes', { meetingId: lena.id, text: sampleText('lena') }); }),
-      step('granola', 'Bring in the call with Maya from Granola', 'The partner meeting board learns where you left off: the cohort table, churn, the Zoom question.', granolaOffered() ? 'Import from Granola' : null, () => openGranolaImport()),
+      step('granola', 'Bring in the call with Maya from Granola', 'The partner meeting board learns where you left off: the cohort table, churn, the Zoom question.', notesOffered() ? 'Import from Granola' : null, () => openNotesImport('granola')),
       step('cohort', 'Keep a promise', 'Paste the email where you sent Maya the cohort table. The promise drops off what you owe.', 'Paste the email', () => pasteSample('cohort')),
       step('float', 'Float a board beside the call', 'A small window over Zoom or Meet in Chrome. H hides it, S shows sources, F finds anything.', 'Float the Larkspur board', () => openMeeting('demo_larkspur_partner', true)),
       step('edit', 'Make a board yours', 'Fill in a Goal or add a note, then paste something new about that meeting. Your changes stay; the rest updates.', null)));
@@ -3033,9 +3066,10 @@ function renderToday() {
       h('span', { text: o.text }))))
       : h('p', { class: 'td-muted', text: 'Nothing owed either way.' }));
 
-  const gr = granolaOffered() ? h('div', { class: 'td-owed' }, h('h2', { text: 'Notes you already have' }),
-    h('p', { class: 'td-muted', text: 'Bring in past meetings from Granola, so follow-ups know where you left off.' }),
-    h('button', { class: 'btn td-gr', type: 'button', onclick: openGranolaImport }, ic('note'), 'Import from Granola')) : null;
+  const setUp = notesApps().filter(s => s.available);
+  const gr = notesOffered() && notesApps().length ? h('div', { class: 'td-owed' }, h('h2', { text: 'Notes you already have' }),
+    h('p', { class: 'td-muted', text: `Bring in past meetings from ${notesAppNames()}, so follow-ups know where you left off.` }),
+    h('button', { class: 'btn td-gr', type: 'button', onclick: () => openNotesImport() }, ic('note'), setUp.length === 1 ? `Import from ${setUp[0].name}` : 'Import notes')) : null;
   todayEl.replaceChildren(top, h('div', { class: 'td-main' }, list, h('aside', { class: 'td-side' }, demoGuide(), calendarCard(), researchCard(), paste, gr, owed)));
 }
 
@@ -4326,7 +4360,7 @@ async function boot() {
   // who has started looking around; then refit once fonts settle, unless they've moved the view.
   const saved = await Store.ready;
   Mem.ready = Mem.ready || loadMemory();
-  granolaStatus();
+  notesStatus();
   sessionStatus();
   calendarBoot();
   demoStatus();

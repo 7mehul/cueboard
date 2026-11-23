@@ -14,6 +14,11 @@ npm run typecheck
 Node 26 runs the TypeScript files directly; there's no build step except the app bundle, which
 the server rebuilds on every change.
 
+## Adding your notes app
+
+A connector for another notes app (Fireflies, Fathom, tl;dv…) is one file in `connectors/` and
+its test. [CONNECTORS.md](CONNECTORS.md) walks through it, and you don't need the app to write it.
+
 ## Before you open a pull request
 
 - `npm test` and `npm run typecheck` pass.

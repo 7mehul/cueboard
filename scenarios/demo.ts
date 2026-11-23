@@ -1,7 +1,7 @@
 import type { Extraction } from '../src/intel/schemas.ts';
 import { commit, propose } from '../src/memory/extract.ts';
 import type { CalendarEvent } from '../src/memory/calendar.ts';
-import type { GranolaNote } from '../src/memory/granola.ts';
+import type { GranolaNote } from '../connectors/granola.ts';
 import { emptyMemory } from '../src/memory/types.ts';
 import type { Doc, Memory } from '../src/memory/types.ts';
 import type { UserProfile } from '../src/types.ts';
