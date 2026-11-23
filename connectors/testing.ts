@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { notesToDoc } from '../src/memory/notes.ts';
+import type { Self } from '../src/memory/notes.ts';
 import type { Doc } from '../src/memory/types.ts';
-import { SourceError, cleanList, cleanNotes, connectorContext, idMatches } from './kit.ts';
+import { NotesProblem, SourceError, cleanList, cleanNotes, connectorContext, idMatches } from './kit.ts';
 import type { MeetingNotes, NoteListItem, NotesConnector } from './kit.ts';
 
 // Testing a connector without its app: a fake of the app's API, and one call that runs the
@@ -58,19 +59,25 @@ export function checkShape(c: NotesConnector) {
 // Runs the connector against a fake API: lists every page, fetches every note listed, and checks
 // what comes back the way the server does, failing on anything it would have to drop or fix. Then
 // checks that errors from the API reach the page instead of being swallowed. Gives back what it
-// got, for your own checks of what your connector made of the API's answers.
-export async function checkConnector(c: NotesConnector, opts: { env: Record<string, string>; api: ReturnType<typeof fakeApi>; after?: string }) {
+// got, for your own checks of what your connector made of the API's answers. `self` stands in for
+// the person's About you, as the page passes it when reading a note.
+export async function checkConnector(c: NotesConnector, opts: { env: Record<string, string>; api: ReturnType<typeof fakeApi>; after?: string; self?: Self }) {
   checkShape(c);
   for (const k of c.env) assert.ok(opts.env[k], `give the test a value for ${k}`);
   const ctx = connectorContext(c, opts.env, { fetch: opts.api.fetch, wait: async () => { } });
   const after = opts.after ?? '2000-01-01';
+  // A problem found while checking what a call gave back says which call it was.
+  const named = async <T>(call: string, run: () => Promise<T>): Promise<T> => {
+    try { return await run(); } catch (e) { if (e instanceof NotesProblem) e.message = `${call}: ${e.message}`; throw e; }
+  };
 
   const listed: NoteListItem[] = [];
   let cursor: string | undefined;
   for (let page = 0; page < 20; page++) {
     const problems: string[] = [];
-    const p = cleanList(c, await c.list(ctx, { after, ...(cursor ? { cursor } : {}) }), problems);
-    assert.deepEqual(problems, [], 'list(): what Cueboard would have to fix or drop');
+    const call = `list(${cursor ? `cursor ${cursor}` : 'first page'})`;
+    const p = await named(call, async () => cleanList(c, await c.list(ctx, { after, ...(cursor ? { cursor } : {}) }), problems));
+    assert.deepEqual(problems, [], `${call}: what Cueboard would have to fix or drop`);
     listed.push(...p.notes);
     if (!p.cursor) break;
     assert.notEqual(p.cursor, cursor, 'list(): the next cursor should differ from the last');
@@ -83,19 +90,23 @@ export async function checkConnector(c: NotesConnector, opts: { env: Record<stri
   const notes: MeetingNotes[] = [], docs: Doc[] = [];
   for (const item of listed) {
     const problems: string[] = [];
-    const n = cleanNotes(c, await c.fetch(ctx, item.id), problems);
+    const n = await named(`fetch(${item.id})`, async () => cleanNotes(c, await c.fetch(ctx, item.id), problems));
     assert.deepEqual(problems, [], `fetch(${item.id}): what Cueboard would have to fix or drop`);
     assert.equal(n.id, item.id, `fetch(${item.id}) gave back a different note`);
-    const doc = notesToDoc(c, n);
-    if (n.me) assert.ok(!(/^With: .*$/m.exec(doc.text)?.[0] ?? '').toLowerCase().includes(n.me.email), `fetch(${item.id}): you are listed among the people you met`);
+    const doc = notesToDoc(c, n, { self: opts.self });
+    const withLine = (/^With: .*$/m.exec(doc.text)?.[0] ?? '').toLowerCase();
+    for (const me of [n.me?.email, opts.self?.email]) if (me) assert.ok(!withLine.includes(me.toLowerCase()), `fetch(${item.id}): you are listed among the people you met`);
     notes.push(n); docs.push(doc);
   }
   assert.deepEqual(opts.api.unmatched, [], 'calls the fake API has no route for');
 
   // The key goes in a header, never in the address, where proxies and logs would keep it.
   const keys = c.env.map(k => opts.env[k]).filter(v => v.length >= 4);
-  assert.ok(opts.api.calls.every(q => keys.every(k => !q.url.href.includes(k))), 'a key was sent in the URL: send it in a header');
-  assert.ok(opts.api.calls.every(q => keys.some(k => [...q.headers.values()].some(v => v.includes(k)))), 'a call went without the key');
+  const where = (q: FakeRequest) => `${q.method} ${q.url.pathname}`;
+  for (const q of opts.api.calls) {
+    assert.ok(keys.every(k => !q.url.href.includes(k)), `${where(q)}: a key was sent in the URL; send it in a header`);
+    assert.ok(keys.some(k => [...q.headers.values()].some(v => v.includes(k))), `${where(q)}: this call went without the key`);
+  }
 
   // An API that refuses the key: the page should hear it, not get an empty list.
   const refused = connectorContext(c, opts.env, { fetch: (async () => reply(401, { error: 'bad key' })) as typeof fetch, wait: async () => { } });

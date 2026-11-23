@@ -144,7 +144,7 @@ async function api(req: IncomingMessage, res: ServerResponse) {
   if (!allowed(req)) { notAllowed(res); return; }
   if (req.method === 'GET') { send(res, 200, { available: !!llm, chat: !!llm?.text, ...(llm ? { model: llm.name } : {}) }); return; }
   if (req.method !== 'POST') { send(res, 405, { error: { code: 'other', message: 'Use POST' } }); return; }
-  if (!llm) { send(res, 503, { error: { code: 'unavailable', message: 'No model: start the server with ANTHROPIC_API_KEY set' } }); return; }
+  if (!llm) { send(res, 503, { error: { code: 'unavailable', message: 'Claude isn’t connected. Run ant auth login (or add ANTHROPIC_API_KEY to Cueboard’s settings), then start Cueboard again.' } }); return; }
   const body = json(await readBody(req, 2_000_000)) as { step?: string; system?: string; prompt?: string; effort?: 'low' | 'medium' | 'high'; maxTokens?: number } | null;
   const schema = typeof body?.step === 'string' && Object.hasOwn(SCHEMAS, body.step) ? SCHEMAS[body.step as keyof typeof SCHEMAS] : undefined;
   if (!body || !schema || typeof body.system !== 'string' || typeof body.prompt !== 'string') { send(res, 400, { error: { code: 'other', message: 'Unknown step or missing prompt' } }); return; }

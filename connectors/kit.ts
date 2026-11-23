@@ -36,8 +36,9 @@ export interface NotesPage { notes: NoteListItem[]; cursor?: string | null }
 export interface Ctx {
   // Only the settings in `env`.
   env: Readonly<Record<string, string>>;
-  // JSON from the app's API. Retries when the API asks to slow down; throws a SourceError for any
-  // answer that isn't a success, so the page can say what went wrong.
+  // JSON from the app's API. Waits and tries again when the API asks to slow down (up to five
+  // times, a minute at most each); throws a SourceError for any answer that isn't a success, so the
+  // page can say what went wrong.
   http<T = any>(url: string, opts?: { method?: 'GET' | 'POST'; headers?: Record<string, string>; body?: unknown }): Promise<T>;
 }
 
@@ -69,9 +70,9 @@ export function connectorContext(c: NotesConnector, env: Record<string, string |
           redirect: 'error',
           signal: AbortSignal.timeout(25_000),
         });
-        if (r.status === 429 && attempt < 3) {
+        if (r.status === 429 && attempt < 5) {
           await r.body?.cancel();
-          await wait(Math.min(Number(r.headers.get('retry-after')) || attempt + 1, 20) * 1000);
+          await wait(Math.min(Number(r.headers.get('retry-after')) || 2 ** attempt, 60) * 1000);
           continue;
         }
         if (!r.ok) { await r.body?.cancel(); throw new SourceError(r.status); }
@@ -108,7 +109,9 @@ export function problemFor(c: NotesConnector, e: unknown): { status: number; cod
 // connectors/testing.ts use the problems list to tell a connector's author what to fix.
 
 const str = (v: unknown, max: number) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
-const isDate = (v: unknown) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(v) && !Number.isNaN(Date.parse(v));
+// A moment, not a wall-clock time: without its zone, a time would be read in wherever Cueboard runs.
+const isDate = (v: unknown) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T[\d:.]+(?:Z|[+-]\d{2}:?\d{2})$/.test(v) && !Number.isNaN(Date.parse(v));
+const DATE_HELP = 'should be an ISO date and time with its zone, like 2026-10-08T14:00:00Z';
 const EMAIL = /^[^\s@<>,]+@[^\s@<>,]+\.[^\s@<>,]+$/;
 const email = (v: unknown) => { const s = str(v, 254).toLowerCase(); return EMAIL.test(s) ? s : ''; };
 
@@ -119,7 +122,7 @@ export function cleanList(c: NotesConnector, page: NotesPage, problems: string[]
   const notes: NoteListItem[] = [];
   for (const [i, n] of page.notes.entries()) {
     if (typeof n?.id !== 'string' || !matches(c.noteId, n.id)) { problems.push(`notes[${i}].id ${JSON.stringify(n?.id)} doesn’t match noteId`); continue; }
-    if (!isDate(n.at)) { problems.push(`notes[${i}].at should be an ISO date and time, got ${JSON.stringify(n.at)}`); continue; }
+    if (!isDate(n.at)) { problems.push(`notes[${i}].at ${DATE_HELP}, got ${JSON.stringify(n.at)}`); continue; }
     const title = str(n.title, 200);
     if (!title) problems.push(`notes[${i}].title is empty`);
     notes.push({ id: n.id, title: title || 'Untitled meeting', at: n.at });
@@ -131,13 +134,13 @@ export function cleanList(c: NotesConnector, page: NotesPage, problems: string[]
 export function cleanNotes(c: NotesConnector, n: MeetingNotes, problems: string[] = []): MeetingNotes {
   if (!n || typeof n !== 'object') throw new NotesProblem('fetch() has to return a note');
   if (typeof n.id !== 'string' || !matches(c.noteId, n.id)) throw new NotesProblem(`id ${JSON.stringify(n.id)} doesn’t match noteId`);
-  if (!isDate(n.start)) throw new NotesProblem(`start should be an ISO date and time, got ${JSON.stringify(n.start)}`);
+  if (!isDate(n.start)) throw new NotesProblem(`start ${DATE_HELP}, got ${JSON.stringify(n.start)}`);
   const title = str(n.title, 200);
   if (!title) problems.push('title is empty');
   const out: MeetingNotes = { id: n.id, title: title || 'Untitled meeting', start: n.start, people: [] };
   if (n.end != null) {
     if (isDate(n.end) && Date.parse(n.end) >= Date.parse(n.start)) out.end = n.end;
-    else problems.push(`end ${JSON.stringify(n.end)} isn’t a time after start`);
+    else problems.push(`end ${JSON.stringify(n.end)} ${isDate(n.end) ? 'isn’t after start' : DATE_HELP}`);
   }
   if (n.url != null) {
     if (typeof n.url === 'string' && /^https:\/\/[^\s]+$/.test(n.url) && n.url.length <= 2000) out.url = n.url;
@@ -165,8 +168,9 @@ export function cleanNotes(c: NotesConnector, n: MeetingNotes, problems: string[
       const text = str(l?.text, 20_000);
       if (typeof l?.text !== 'string') { problems.push(`transcript[${i}].text should be text`); continue; }
       if (!text) continue;
-      const name = str(l.name, 120), label = str(l.label, 60);
-      lines.push({ text, ...(l.me === true ? { me: true } : {}), ...(name ? { name } : {}), ...(label ? { label } : {}) });
+      const name = str(l.name, 120), label = str(l.label, 60), e = email(l.email);
+      if (l.email != null && l.email !== '' && !e) problems.push(`transcript[${i}].email ${JSON.stringify(l.email)} isn’t an email address`);
+      lines.push({ text, ...(l.me === true ? { me: true } : {}), ...(name ? { name } : {}), ...(e ? { email: e } : {}), ...(label ? { label } : {}) });
     }
     if (lines.length) out.transcript = lines;
   } else if (n.transcript != null) problems.push('transcript should be a list of lines or text');

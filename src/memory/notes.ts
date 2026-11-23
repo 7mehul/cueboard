@@ -7,9 +7,9 @@ import type { Doc } from './types.ts';
 // written and said; the app's summary is its AI's paraphrase. The person themselves is "Me",
 // never one of the people they met.
 
-// One line of a transcript, and who said it: you (`me`), someone the app could name, or a voice
-// it only tells apart ("Speaker 2").
-export interface SaidLine { text: string; me?: boolean; name?: string; label?: string }
+// One line of a transcript, and who said it: you (`me`), someone the app could name (and their
+// email, when it matched the voice to a guest), or a voice it only tells apart ("Speaker 2").
+export interface SaidLine { text: string; me?: boolean; name?: string; email?: string; label?: string }
 
 export interface NotesPerson { name?: string; email?: string }
 
@@ -22,7 +22,8 @@ export interface MeetingNotes {
   end?: string;
   // Where to open the note in the app. https only.
   url?: string;
-  // Whose account this is, so they're "Me" and not one of the people they met.
+  // Whose account this is, when the app says so for certain. Leave it out when it can't (a
+  // meeting a colleague shared, say): Cueboard then goes by the person's About you.
   me?: { name?: string; email: string };
   // Everyone in the meeting, as the app lists them; `me` may be among them.
   people: NotesPerson[];
@@ -48,10 +49,18 @@ const pad = (n: number) => String(n).padStart(2, '0');
 const localDay = (iso: string) => { const d = new Date(iso); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
 const clock = (iso: string) => { const d = new Date(iso); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 
+// Who the person is (their About you, and the app's `me`): their lines are "Me", and they aren't
+// among the people they met. An email decides when there is one; otherwise the name does.
+export interface Self { email?: string; name?: string }
+
+const same = (a?: string, b?: string) => !!a && !!b && a.trim().toLowerCase() === b.trim().toLowerCase();
+const isSelf = (selves: Self[], email?: string, name?: string) =>
+  selves.some(s => (email ? same(email, s.email) : same(name, s.name)));
+
 // Consecutive lines from the same voice become one paragraph, labelled Me, Them (a name), a voice
-// label, or Them.
-export function transcriptText(lines: SaidLine[]): string {
-  const who = (l: SaidLine) => (l.me ? 'Me' : l.name ? `Them (${l.name})` : l.label || 'Them');
+// label, or Them. A line is Me when the app says so, or when its voice is the person's own.
+export function transcriptText(lines: SaidLine[], selves: Self[] = []): string {
+  const who = (l: SaidLine) => (l.me || isSelf(selves, l.email, l.name) ? 'Me' : l.name ? `Them (${l.name})` : l.label || 'Them');
   const out: { who: string; text: string }[] = [];
   for (const l of lines) {
     const text = l.text.replace(/\s+/g, ' ').trim();
@@ -64,11 +73,12 @@ export function transcriptText(lines: SaidLine[]): string {
   return out.map(x => `${x.who}: ${x.text}`).join('\n');
 }
 
-export function notesToDoc(app: NotesApp, n: MeetingNotes, opts: { maxTranscript?: number } = {}): Doc {
+// `self` is the person's About you.
+export function notesToDoc(app: NotesApp, n: MeetingNotes, opts: { maxTranscript?: number; self?: Self } = {}): Doc {
   const max = opts.maxTranscript ?? 60_000;
   const title = n.title.trim() || 'Untitled meeting';
-  const me = n.me?.email.toLowerCase();
-  const others = n.people.filter(p => !me || (p.email ?? '').toLowerCase() !== me).filter(p => p.name || p.email);
+  const selves = [opts.self, n.me].filter((s): s is Self => !!s);
+  const others = n.people.filter(p => (p.name || p.email) && !isSelf(selves, p.email, p.name));
   const parts: string[] = [];
   parts.push(`${app.name} notes: ${title}`);
   parts.push(`Meeting: ${localDay(n.start)} ${clock(n.start)}${n.end ? `–${clock(n.end)}` : ''}`);
@@ -77,7 +87,7 @@ export function notesToDoc(app: NotesApp, n: MeetingNotes, opts: { maxTranscript
   if (mine) parts.push('', 'MY NOTES', mine);
   const summary = (n.summary ?? '').trim();
   if (summary) parts.push('', `AI SUMMARY (written by ${app.name}, not by me)`, summary);
-  const said = (typeof n.transcript === 'string' ? n.transcript : transcriptText(n.transcript ?? [])).trim();
+  const said = (typeof n.transcript === 'string' ? n.transcript : transcriptText(n.transcript ?? [], selves)).trim();
   if (said) parts.push('', 'TRANSCRIPT', said.length > max ? said.slice(0, max).replace(/\s+\S*$/, '') + '\n[The transcript goes on; the rest was left out to keep this readable.]' : said);
   return {
     id: notesDocId(app.id, n.id),

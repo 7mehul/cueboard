@@ -16,7 +16,7 @@ the server rebuilds on every change.
 
 ## Adding your notes app
 
-A connector for another notes app (Fireflies, Fathom, tl;dv…) is one file in `connectors/` and
+A connector for another notes app (Fireflies, tl;dv, Otter…) is one file in `connectors/` and
 its test. [CONNECTORS.md](CONNECTORS.md) walks through it, and you don't need the app to write it.
 
 ## Before you open a pull request

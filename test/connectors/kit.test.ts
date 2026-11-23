@@ -5,6 +5,7 @@ import { NOTES_APPS } from '../../connectors/index.ts';
 import example from '../../connectors/example.ts';
 import { SourceError, cleanList, cleanNotes, connectorContext, problemFor, sampleConnector } from '../../connectors/kit.ts';
 import type { MeetingNotes } from '../../connectors/kit.ts';
+import { notesToDoc } from '../../src/memory/notes.ts';
 import { checkConnector, checkShape, fakeApi, reply } from '../../connectors/testing.ts';
 
 test('every notes app listed has a test of its own and a unique id', () => {
@@ -97,4 +98,36 @@ test('checkConnector catches the usual mistakes', async () => {
   await fails({ ...example, fetch: async (ctx, id) => ({ ...(await example.fetch(ctx, id)), people: [{ email: 'Maya' }] }) }, /what Cueboard would have to fix or drop/);
   await fails({ ...example, noteId: /mtg_[a-z0-9]{8}/ }, /anchored with \^ and \$/);
   await fails({ ...example, hosts: ['https://api.notes.example'] }, /bare host name/);
+});
+
+test('a time without its zone is refused, and a speaker’s email is checked', () => {
+  assert.throws(() => cleanNotes(example, { ...good, start: '2026-10-08T14:00:00' }), /with its zone, like 2026-10-08T14:00:00Z/);
+  for (const ok of ['2026-10-08T14:00:00Z', '2026-10-08T14:00:00.000+05:30', '2026-10-08T10:00:00-0400']) assert.equal(cleanNotes(example, { ...good, start: ok, end: undefined }).start, ok);
+  const problems: string[] = [];
+  const n = cleanNotes(example, { ...good, transcript: [{ text: 'Hi', name: 'Maya', email: 'Maya@Larkspur.example' }, { text: 'Yo', email: 'nope' }] }, problems);
+  assert.deepEqual(n.transcript, [{ text: 'Hi', name: 'Maya', email: 'maya@larkspur.example' }, { text: 'Yo' }]);
+  assert.match(problems.join(), /transcript\[1\]\.email "nope"/);
+  cleanList(example, { notes: [{ id: 'mtg_a1b2c3d4', title: 'A', at: '2026-10-08T14:00:00' }] }, problems);
+  assert.match(problems.at(-1)!, /notes\[0\]\.at should be an ISO date and time with its zone/);
+});
+
+test('you are “Me” by your About you, whether or not the app knows whose account it is', () => {
+  const n: MeetingNotes = {
+    id: 'mtg_a1b2c3d4', title: 'Call', start: '2026-10-08T14:00:00Z',
+    people: [{ name: 'Alex Rivera', email: 'alex@cueboard.example' }, { name: 'Maya Chen', email: 'maya@larkspur.example' }, { name: 'Alex Rivera' }],
+    transcript: [{ text: 'Hello.', name: 'Alex Rivera', email: 'alex@cueboard.example' }, { text: 'Hi.', name: 'Maya Chen' }, { text: 'Shall we?', name: 'alex rivera' }],
+  };
+  const withSelf = notesToDoc(example, n, { self: { name: 'Alex Rivera', email: 'Alex@cueboard.example' } }).text;
+  assert.match(withSelf, /^With: Maya Chen <maya@larkspur\.example>$/m);
+  assert.match(withSelf, /^Me: Hello\.\nThem \(Maya Chen\): Hi\.\nMe: Shall we\?$/m, 'by email, or by name when there is no email');
+  assert.match(notesToDoc(example, n).text, /^Them \(Alex Rivera\): Hello\./m, 'with nothing to go on, nobody is assumed to be you');
+  assert.match(notesToDoc(example, { ...n, me: { email: 'alex@cueboard.example' } }).text, /^Me: Hello\./m, 'the app’s own word for whose account it is');
+});
+
+test('the checker says which call gave back what it couldn’t use', async () => {
+  const meetings = [{ id: 'mtg_a1b2c3d4', name: 'Call', started_at: '2026-10-08T14:00:00Z', owner: { email: 'alex@cueboard.example' }, participants: [], ai_summary: 'Churn.' }];
+  const api = () => fakeApi({ 'GET /v1/meetings': { meetings, next_page_token: null }, 'GET /v1/meetings/:id': meetings[0] });
+  const env = { EXAMPLE_NOTES_API_KEY: 'k-1234' };
+  await assert.rejects(checkConnector({ ...example, fetch: async (ctx, id) => ({ ...(await example.fetch(ctx, id)), start: 'Thu, 08 Oct 2026 14:00:00 GMT' }) }, { env, api: api() }), /^NotesProblem: fetch\(mtg_a1b2c3d4\): start should be/);
+  await assert.rejects(checkConnector({ ...example, list: async ctx => { await ctx.http(`https://api.notes.example/v1/meetings?api_key=${ctx.env.EXAMPLE_NOTES_API_KEY}`); return { notes: [{ id: 'mtg_a1b2c3d4', title: 'Call', at: meetings[0].started_at }] }; } }, { env, api: api() }), /GET \/v1\/meetings: a key was sent in the URL/);
 });

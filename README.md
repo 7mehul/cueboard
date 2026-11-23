@@ -9,7 +9,7 @@ it came from. During the call, a small window floats over Zoom, Meet or Teams an
 ![A board drafted for a renewal check-in. Typing a goal, "Find out why their seats keep falling", redraws the plan, the opener, the ask and the questions around it.](docs/demo.gif)
 
 It works from what you already have: your calendar, your notes from past calls (pasted, or
-imported from Granola), emails and invites. It remembers people, not transcripts, so the second
+imported from Granola or Fathom), emails and invites. It remembers people, not transcripts, so the second
 meeting with someone knows where the first one left off.
 
 It runs on your own computer, with your own Claude key. There's no Cueboard cloud and no
@@ -24,7 +24,7 @@ stand-in model, not the real service yet: [what's been tried for real](#whats-be
 npx cueboard demo
 ```
 
-Open http://localhost:5190, choose **Load the demo week** in the boards menu, and open a board.
+Open http://localhost:5190 and choose **Load the demo week**, then open a board.
 A founder's week is loaded: a renewal at risk, an investor partner meeting, a first sales call.
 Type a goal in the bar at the top ("find out why seats are falling") and the board redraws
 around it. The demo uses a stand-in for Claude that only knows the demo's documents.
@@ -46,7 +46,7 @@ window running `cueboard` holds your keys and makes the calls to Claude, your no
 so the page never sees a key. It runs while that window is open; Ctrl+C stops it, and your boards
 stay in the browser.
 
-Other settings (Granola, Google Calendar, which model) go in `~/.cueboard/.env`;
+Other settings (a notes app's key, Google Calendar, which model) go in `~/.cueboard/.env`;
 [`.env.example`](.env.example) lists them all. To open Cueboard from your phone as well, see
 [Optional: run it on a server](#optional-run-it-on-a-server).
 
@@ -71,8 +71,9 @@ It rebuilds the page as you edit; [CONTRIBUTING.md](CONTRIBUTING.md) has the res
 | Research on the people you meet | Built. Not yet tried with real Claude | Claude (it uses Claude's web search). On by default; switch it off on Today |
 | Paste: invites, email threads, notes, transcripts | Built. The current version not yet tried with real Claude | Claude, to read them. Paste several at once, or drop text files; each piece is sorted and dated |
 | Granola notes | Built. Not yet tried with a real Granola account | A Granola Business plan API key |
+| Fathom notes | Built from Fathom's API reference. Not yet tried with a real Fathom account | A Fathom API key (User Settings → API Access) |
 | Your profile and goals | Works | Fill in "About you" once |
-| Other notes apps (Fireflies, Fathom, tl;dv…) | Not yet: [add one](CONNECTORS.md). It's one file and its test | |
+| Other notes apps (Fireflies, tl;dv, Otter…) | Not yet: [add one](CONNECTORS.md). It's one file and its test | |
 | Gmail, CRMs | Planned | |
 
 "Built" means tested here with sample data or the stand-in model. If you try one for real, an
@@ -262,11 +263,13 @@ paste ─▶ read (model) ─▶ check (code) ─▶ review (you) ─▶ memory 
   shared: `src/memory/notes.ts` turns a note into one document: your notes, then the app's summary
   (labelled as written by its AI, so quotes come from your notes or the transcript where
   possible), then the transcript with you as "Me". Every record keeps a link back to the note in
-  the app, shown in Float's sources. Granola is the first: it needs a Granola API key (Business
-  plan: Settings → Connectors → API keys) set as `GRANOLA_API_KEY` in Cueboard's settings. Keys
+  the app, shown in Float's sources. Granola needs a Granola API key (Business plan: Settings →
+  Connectors → API keys) set as `GRANOLA_API_KEY` in Cueboard's settings; Fathom needs
+  `FATHOM_API_KEY` (User Settings → API Access). You're "Me" by your About you, even in a
+  meeting a colleague recorded and shared. Keys
   stay in the Cueboard app on your computer, never in the page, and each connector can only send
   its key to the hosts it lists. `--fake-granola` serves two sample notes from
-  `scenarios/granola.ts`; Granola hasn't been tried with a real account yet.
+  `scenarios/granola.ts`; neither app has been tried with a real account yet.
 - Reading needs Claude, and so does the Assistant panel. The Cueboard app on your computer makes
   the calls, so the key never reaches the page, and it only answers the page it serves.
   `--fake-model` (which `npx cueboard demo` uses) answers for the sample documents in
@@ -280,7 +283,7 @@ node scripts/eval-extract.ts --verbose     # a real model reads the six sample d
 ## Run it
 
 ```bash
-npm test                                   # 172 tests: behaviour, the plan, calendar links and invites, research, the checker catching each broken rule, the judgment layer, memory, Today, notes connectors, calendar, refresh, the demo week, the server and its password
+npm test                                   # 180 tests: behaviour, the plan, calendar links and invites, research, the checker catching each broken rule, the judgment layer, memory, Today, notes connectors, calendar, refresh, the demo week, the server and its password
 node scripts/show.ts followup              # print a board as text (first | followup | seed:<n>)
 node scripts/scale.ts --n 1000000          # generate, build and check a million boards
 node scripts/scale.ts --n 200000 --edge 0.5   # same, with planted problems in half the packets
@@ -468,7 +471,7 @@ What to know:
 | `src/memory/split.ts` | One paste into several documents: where each starts, what it is, when it's from |
 | `src/memory/today.ts` | What Today shows: meetings by day, board status, changes since last time, what's owed |
 | `src/memory/notes.ts` | Meeting notes from any notes app, as one document to read into memory |
-| `connectors/` | One file per notes app (`granola.ts`), what they share (`kit.ts`), how to test one (`testing.ts`), and an example to copy ([CONNECTORS.md](CONNECTORS.md)) |
+| `connectors/` | One file per notes app (`granola.ts`, `fathom.ts`), what they share (`kit.ts`), how to test one (`testing.ts`), and an example to copy ([CONNECTORS.md](CONNECTORS.md)) |
 | `src/memory/calendar.ts` | Calendar events into memory; a board's fingerprint; which boards to draft or refresh |
 | `src/refresh.ts` | Bringing a drafted board up to date while keeping everything the user did |
 | `scripts/google.ts` | Google sign-in, the sealed grant, reading events |
@@ -514,7 +517,7 @@ Tried:
 - `npx cueboard`: packed, installed in a fresh folder and run there with no key and an empty home
   folder, on every push (`scripts/check-package.sh`); the demo week drafting its boards in a browser.
 - The Docker image, built and checked on every push (`scripts/check-image.sh`, Intel/AMD).
-- 172 tests, and the checker over a million generated boards.
+- 180 tests, and the checker over a million generated boards.
 
 Not yet tried:
 
@@ -524,7 +527,8 @@ Not yet tried:
   Claude's structured output. It has been cut down since, but not run again
   (`node scripts/eval-extract.ts` is the check).
 - **Research** with Claude's real web search.
-- **Google sign-in** with a real Google account, and **Granola** with a real account.
+- **Google sign-in** with a real Google account, and **Granola** and **Fathom** with real
+  accounts. (A made-up Granola key gets Granola's refusal, shown plainly; that's all so far.)
 - **Calendar links from Outlook and Apple**, and invite files sent by real calendars.
 - **Float in a real call**: the window that stays on top of Zoom, Meet or Teams in Chrome.
 - **A server behind a real HTTPS proxy and domain**, the image on an ARM server, and the release

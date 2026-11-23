@@ -1,8 +1,8 @@
 # Adding your notes app
 
 Cueboard reads past meetings from the app you take notes in, so the next board with those people
-knows where you left off. Granola is the only one so far. Adding another app takes one file and
-its test. Cueboard handles the rest: the import screen, the requests, retries, error messages,
+knows where you left off. Granola and Fathom so far. Adding another app takes one file and its
+test. Cueboard handles the rest: the import screen, the requests, retries, error messages,
 and checking what comes back.
 
 You need an app with an API that gives people a key for their own notes. You don't need the app
@@ -18,8 +18,11 @@ itself to write the connector: the test runs it against a fake copy of the API.
    like.
 3. Write `list()` and `fetch()`: turn the app's API answers into Cueboard's shape.
 4. In the test, make the fake API answer the way the real one does. Copy an answer from the app's
-   API docs and swap in made-up people. `checkConnector` then runs your connector against it.
-5. Add it to [`connectors/index.ts`](connectors/index.ts).
+   API docs and swap in made-up people. If the docs only list the fields, build an answer from
+   them and say so in a comment. `checkConnector` then runs your connector against it.
+5. Add it to [`connectors/index.ts`](connectors/index.ts), its setting to
+   [`.env.example`](.env.example) under "Notes apps", and a row to the README's "Where the context
+   comes from" table: "Built. Not yet tried with a real … account", unless you tried it.
 6. Run `npm test` and `npm run typecheck`.
 7. If you have an account, try it for real: put the key in `.env` and run `npm start`, then
    choose **Import meeting notes** in the boards menu. Say in the pull request whether you did.
@@ -54,24 +57,28 @@ Both get a `ctx`:
 
 - `ctx.env` holds your settings: `ctx.env.EXAMPLE_NOTES_API_KEY`.
 - `ctx.http(url, { method, headers, body })` returns the API's JSON. If the API says to slow down,
-  it waits and tries again. Any other answer that isn't a success becomes a `SourceError`, which
-  the page shows in plain words ("Example Notes didn't accept the key. Check
-  EXAMPLE_NOTES_API_KEY…"). Use it for every call. Don't add an HTTP library.
+  it waits as long as the API asks and tries again, up to five times. Any other answer that isn't
+  a success becomes a `SourceError`, which the page shows in plain words ("Example Notes didn't
+  accept the key. Check EXAMPLE_NOTES_API_KEY…"). Use it for every call. Don't add an HTTP
+  library. If the app limits calls tightly, make as few per note as you can: one, ideally.
 
 `list(ctx, { after, cursor })` returns a page of notes from meetings on or after `after`
 (YYYY-MM-DD): `{ notes: [{ id, title, at }], cursor }`. `at` is when the meeting was, or when the
 note was made if that's all the list gives. Return the API's next-page cursor, or `null` on the
 last page.
 
-`fetch(ctx, id)` returns one note, whole:
+`fetch(ctx, id)` returns one note, whole. It gets only the id, so if the app can't fetch one
+meeting by its id, put what you need to find it into the id when you list it, and describe that in
+`noteId`. Fathom's connector does this: its ids are the recording's number and when Fathom made
+it (`123456789-1791469865`), and `fetch()` asks the list for the minute around that time.
 
 | Field | |
 | --- | --- |
 | `id`, `title` | The note's id and the meeting's title |
-| `start`, `end` | When the meeting started and ended: ISO 8601 with a zone, like `2026-10-08T14:00:00Z` |
+| `start`, `end` | When the meeting started and ended: ISO 8601 with its zone, like `2026-10-08T14:00:00Z`. A time without a zone is refused, since it would be read in wherever Cueboard runs |
 | `url` | Where to open the note in the app (https). Boards link back to it |
-| `me` | `{ name, email }` for whose account this is, so they're "Me" and not someone they met |
-| `people` | Everyone in the meeting, `{ name, email }`, either one if that's all the app knows. It's fine if `me` is among them |
+| `me` | `{ name, email }` for whose account this is, only if the app says so for certain. Leave it out otherwise: Cueboard goes by the person's About you |
+| `people` | Everyone in the meeting, `{ name, email }`, either one if that's all the app knows. It's fine if the person themselves is among them |
 | `myNotes` | What the person wrote themselves |
 | `summary` | What the app's AI wrote |
 | `transcript` | Lines of `{ text, me, name, label }`, or text the app already labelled ("Maya: …") |
@@ -81,8 +88,10 @@ Leave out anything the app doesn't have.
 Keep `myNotes` and `summary` apart. Cueboard labels the summary as the app's AI, so what it
 remembers quotes your own notes and the transcript ahead of an AI's paraphrase.
 
-In a transcript, set `me: true` on the person's own lines when the app says which they are. Set
-`name` when it knows who spoke, and `label` when it only tells voices apart ("Speaker 2").
+In a transcript, give each line what the app knows about who spoke: `name`, and `email` when it
+matched the voice to a guest. Cueboard marks the person's own lines "Me" by their About you. Set
+`me: true` yourself only when the app says for certain which lines are the account owner's, and
+`label` when it only tells voices apart ("Speaker 2").
 
 ## The test
 
@@ -101,18 +110,22 @@ test('the example connector passes every check', async () => {
 ```
 
 Routes are keyed by method and path. `:id` matches one part of the path, and a route can answer
-with JSON, with `reply(status)`, or with a function of the request. A GraphQL API is one route,
-`'POST /graphql'`, that looks at `body.query`.
+with JSON, with `reply(status)`, or with a function of the request. When listing and fetching use
+the same address with different query parameters, that's one route whose function looks at
+`url.searchParams` (Fathom's test does this). A GraphQL API is one route, `'POST /graphql'`, that
+looks at `body.query`.
 
-`checkConnector` fails, saying what to fix, when:
+Pass `self: { name, email }` to `checkConnector` to stand in for the person's About you.
+
+`checkConnector` fails, saying which call and what to fix, when:
 
 - the description is off: the id's form, the names in `env` and `hosts`, empty setup steps, or a
   `noteId` that isn't anchored;
 - `list()` or `fetch()` give back something Cueboard would have to fix or drop: an id that doesn't
-  match `noteId`, a date that isn't ISO 8601, a non-https link, an email that isn't one, a person
-  with neither name nor email, or a note with no notes, summary or transcript;
+  match `noteId`, a time that isn't ISO 8601 with its zone, a non-https link, an email that isn't
+  one, a person with neither name nor email, or a note with no notes, summary or transcript;
 - paging goes wrong: the same cursor twice, or the same note twice;
-- the key travels in a URL, or a call goes without it;
+- the key travels in a URL, or a call goes without it (every setting in `env` counts as a key);
 - the API refuses the key and your connector hides it: returning an empty list instead of letting
   the error through.
 
@@ -132,7 +145,8 @@ made of the API's answers. `docs` holds what memory will actually read.
 - **Long transcripts in pages are fine:** follow the API's paging inside `fetch()` (Granola's
   connector does this when a transcript is too long to come inline).
 
-[`connectors/granola.ts`](connectors/granola.ts) is a real one to compare with.
+[`connectors/granola.ts`](connectors/granola.ts) and [`connectors/fathom.ts`](connectors/fathom.ts)
+are real ones to compare with.
 
 ## Not a notes app?
 

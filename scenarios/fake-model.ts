@@ -33,6 +33,6 @@ export function fakeModel(): LLM {
   // The board assistant gets a polite stand-in reply, so the panel can be tried end to end.
   return {
     ...llm,
-    text: async () => ({ text: JSON.stringify({ reply: 'This is the stand-in model, so I can’t read your board yet. Start Cueboard with your API key and Claude answers here.', actions: [] }) }),
+    text: async () => ({ text: JSON.stringify({ reply: 'This is the demo’s stand-in for Claude, so I can’t read your board. To use Claude: run ant auth login in a terminal, then npx cueboard, and Claude answers here.', actions: [] }) }),
   };
 }

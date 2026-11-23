@@ -480,6 +480,18 @@ function fitAll(animate) {
   if (!r) { setView({ x: canvas.clientWidth / 2, y: canvas.clientHeight / 2, z: 1 }, animate); return; }
   fitRect(r, S.glance ? 1.6 : 1, animate);
 }
+// A board opens at a size you can read: across its full width, from the top, when the whole of it
+// would only fit too small to read. The fit button and Glance still show all of it.
+const READABLE = 0.6;
+function fitOpen() {
+  const r = rectOf(els());
+  if (!r || S.glance) { fitAll(false); return; }
+  const W = canvas.clientWidth, H = canvas.clientHeight, i = insets();
+  const aw = Math.max(120, W - i.l - i.r), ah = Math.max(120, H - i.t - i.b);
+  if (Math.min(aw / Math.max(r.w, 1), ah / Math.max(r.h, 1)) >= READABLE) { fitAll(false); return; }
+  const z = clamp(aw / Math.max(r.w, 1), ZMIN, 1);
+  setView({ z, x: i.l + (aw - r.w * z) / 2 - r.x * z, y: i.t + 8 - r.y * z }, false);
+}
 function viewCenter() {
   const i = insets(), W = canvas.clientWidth, H = canvas.clientHeight;
   return { x: (i.l + (W - i.l - i.r) / 2 - S.view.x) / S.view.z, y: (i.t + (H - i.t - i.b) / 2 - S.view.y) / S.view.z };
@@ -1728,14 +1740,14 @@ function switchBoard(id) {
   // Brought up to date while you were elsewhere: say what changed, once.
   if (b.news) { toast(b.news); delete b.news; }
   if (b.settle) {
-    const run = () => { if (S.boardId !== b.id || !b.settle) return; delete b.settle; settle(); if (b.autoFit && !S.viewTouched) fitAll(false); if (!b.example) scheduleSave(b.id); };
+    const run = () => { if (S.boardId !== b.id || !b.settle) return; delete b.settle; settle(); if (b.autoFit && !S.viewTouched) fitOpen(); if (!b.example) scheduleSave(b.id); };
     requestAnimationFrame(run);
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { b.settle = true; run(); });
   }
   // A board with no saved view is fitted to the screen, and refitted as it settles until the user moves it.
   S.viewTouched = false;
   // A saved view is where the user left it (or the last fit): it stays put.
-  if (b.view) { setView(b.view, false); delete b.autoFit; } else { fitAll(false); b.autoFit = true; }
+  if (b.view) { setView(b.view, false); delete b.autoFit; } else { fitOpen(); b.autoFit = true; }
   setStatus(b.saved ? (Store.mode === 'db' ? 'saved' : Store.mode === 'local' ? 'local' : 'memory') : (b.example ? 'example' : ''));
 }
 function newBoard() {
@@ -2479,7 +2491,7 @@ function updateGoalBar() {
   drawGoalBar();
   // A board still fitted to the screen stays clear of the bar as it grows or shrinks.
   const b = board();
-  if (b && b.autoFit && !S.viewTouched && (GOAL.el.hidden ? 0 : GOAL.el.offsetHeight) !== was && els().length) fitAll(false);
+  if (b && b.autoFit && !S.viewTouched && (GOAL.el.hidden ? 0 : GOAL.el.offsetHeight) !== was && els().length) fitOpen();
 }
 function drawGoalBar() {
   const bar = GOAL.el, b = board();
@@ -2658,7 +2670,8 @@ async function readNotes(app, ids) {
       if (!r.ok || !note) { failed.push((note && note.error && note.error.message) || id); continue; }
       // Your own account in the app says who "me" is, if About you didn't.
       if (note.me && Mem.data.user && !Mem.data.user.email) { Mem.data.user.email = note.me.email; if (!Mem.data.user.name && note.me.name) Mem.data.user.name = note.me.name; }
-      docs.push(Engine.notesToDoc(app, note));
+      // You are "Me" by your About you, even in a meeting a colleague recorded.
+      docs.push(Engine.notesToDoc(app, note, { self: Mem.data.user || undefined }));
     } catch (_) { failed.push(id); }
   }
   R.busy = false;
@@ -2765,6 +2778,9 @@ function calendarCard() {
 const researchOn = () => { try { return localStorage.getItem('cueboard.research') !== 'off'; } catch (_) { return true; } };
 function researchCard() {
   if (!Engine || !Engine.researchMeeting || !serverHere()) return null;
+  // Looking people up is Claude's web search: without Claude there's nothing to switch on yet.
+  if (claudeMissing()) return h('div', { class: 'td-owed td-research' }, h('h2', { text: 'Who you’re meeting' }),
+    h('p', { class: 'td-muted', text: 'Once Claude is connected, Cueboard can look up the people you meet before each meeting: their role, background and company news, with the pages linked. You can switch it off here.' }));
   const on = researchOn();
   const box = h('input', { type: 'checkbox', id: 'td-research', checked: on });
   box.addEventListener('change', () => { try { localStorage.setItem('cueboard.research', box.checked ? 'on' : 'off'); } catch (_) { } renderToday(); if (box.checked) queuePrep(); });
@@ -2875,6 +2891,32 @@ async function demoStatus() {
   } catch (_) { }
 }
 const demoLoaded = () => DEMO.on && Mem.data && Mem.data.user && Mem.data.user.email === 'alex@cueboard.example';
+// The example board, from Today: the one shipped with the page, or the first board there is.
+function showExample() {
+  const id = S.boards['b-example'] ? 'b-example' : Object.keys(S.boards)[0];
+  closeToday();
+  if (id && id !== S.boardId) switchBoard(id);
+}
+
+// Whether the Cueboard app on this computer has Claude. Without it, Today says so first: boards
+// still draft, but from the rules alone, and nothing pasted is read.
+const MODEL = { status: null };
+async function modelStatus() {
+  if (!Engine || !Engine.serverStatus) return;
+  MODEL.status = await Engine.serverStatus();
+  queueToday();
+}
+const claudeMissing = () => serverHere() && !!MODEL.status && !MODEL.status.available;
+const ANT_URL = 'https://platform.claude.com/docs/en/cli-sdks-libraries/cli/quickstart';
+function claudeCard() {
+  if (!claudeMissing()) return null;
+  return h('div', { class: 'td-owed td-claude' }, h('h2', { text: 'Claude isn’t connected' }),
+    h('p', { class: 'td-muted', text: 'Boards still draft from your calendar and invites, with gaps in brackets for you to fill. With Claude, Cueboard reads what you paste and import, drafts the opener, the ask and the questions, looks people up, and answers in the Assistant.' }),
+    h('ol', { class: 'gr-setup' },
+      h('li', {}, 'In a terminal, sign in once with the ', h('a', { href: ANT_URL, target: '_blank', rel: 'noopener noreferrer' }, 'ant CLI'), ':', h('code', { text: 'ant auth login' })),
+      h('li', {}, 'Stop Cueboard (Ctrl+C) and start it again, then reload this page.')),
+    h('p', { class: 'td-muted', text: 'Or put an API key in ~/.cueboard/.env as ANTHROPIC_API_KEY=…' }));
+}
 function openDemo() {
   closeMenu(); blurField(); exitPen();
   R = { mode: 'demo' };
@@ -2998,10 +3040,17 @@ function renderToday() {
   const list = h('div', { class: 'td-list' },
     h('h1', { class: 'td-h1', text: todays ? `${NUMBERS[todays] || todays} ${todays === 1 ? 'meeting' : 'meetings'} today` : 'Nothing on today' }));
   if (!model.sections.length) {
+    // Nothing yet: in the demo, the demo week is one click away; otherwise, an example board.
+    const next = DEMO.on && !demoLoaded()
+      ? h('button', { class: 'btn primary td-start', type: 'button', onclick: openDemo }, ic('spark'), 'Load the demo week')
+      : !CAL.status || !CAL.status.connected ? h('button', { class: 'btn td-start', type: 'button', onclick: showExample }, ic('boards'), 'See an example board') : null;
     list.append(h('div', { class: 'td-empty' },
-      h('p', { text: CAL.status && CAL.status.connected
-        ? (CAL.busy ? 'Reading your calendar…' : 'No meetings with people from outside your company in the next two weeks.')
-        : 'No meetings in memory yet. Connect your calendar, or paste an invite and anything else you have about it, and the board drafts itself.' })));
+      h('p', { text: DEMO.on && !demoLoaded()
+        ? 'This is the demo. Load a founder’s week of meetings to explore: boards drafted from their calendar, notes and emails, with a guide to what to try.'
+        : CAL.status && CAL.status.connected
+          ? (CAL.busy ? 'Reading your calendar…' : 'No meetings with people from outside your company in the next two weeks.')
+          : 'No meetings in memory yet. Connect your calendar, or paste an invite and anything else you have about it, and the board drafts itself.' }),
+      next));
   }
   for (const sec of model.sections) {
     if (sec.key !== 'today') list.append(h('h2', { class: 'td-sec', text: sec.label }));
@@ -3070,7 +3119,7 @@ function renderToday() {
   const gr = notesOffered() && notesApps().length ? h('div', { class: 'td-owed' }, h('h2', { text: 'Notes you already have' }),
     h('p', { class: 'td-muted', text: `Bring in past meetings from ${notesAppNames()}, so follow-ups know where you left off.` }),
     h('button', { class: 'btn td-gr', type: 'button', onclick: () => openNotesImport() }, ic('note'), setUp.length === 1 ? `Import from ${setUp[0].name}` : 'Import notes')) : null;
-  todayEl.replaceChildren(top, h('div', { class: 'td-main' }, list, h('aside', { class: 'td-side' }, demoGuide(), calendarCard(), researchCard(), paste, gr, owed)));
+  todayEl.replaceChildren(top, h('div', { class: 'td-main' }, list, h('aside', { class: 'td-side' }, claudeCard(), demoGuide(), calendarCard(), researchCard(), paste, gr, owed)));
 }
 
 function meetingCard(m, key, now) {
@@ -3701,7 +3750,7 @@ function renderChat() {
     const intro = h('div', { class: 'as-intro' });
     if (AI.off) {
       intro.append(h('p', {}, h('strong', { text: 'Your prep partner' })),
-        h('div', { class: 'as-off' }, h('p', { text: 'The assistant needs a model. Open this page in Claude, or start Cueboard from a terminal where your API key is set:' }), h('code', { text: 'node scripts/serve.ts' }), h('p', { text: 'Everything else on the board works without it.' })));
+        h('div', { class: 'as-off' }, h('p', { text: 'The assistant needs Claude. Sign in once in a terminal, then stop Cueboard and start it again:' }), h('code', { text: 'ant auth login' }), h('p', { text: 'Or add ANTHROPIC_API_KEY to ~/.cueboard/.env. Everything else on the board works without it.' })));
     } else {
       const empty = !els().length;
       intro.append(h('p', {}, h('strong', { text: 'Your prep partner' }), 'It reads this board. Ask it to draft cards, turn rough notes into questions, chart numbers you give it, or poke holes before the call.'));
@@ -4339,7 +4388,7 @@ window.addEventListener('resize', () => { positionSelTools(); positionPop(); });
 let lastW = 0;
 if (window.ResizeObserver) new ResizeObserver(() => {
   const w = canvas.clientWidth;
-  if (lastW < 50 && w >= 50 && board()) fitAll(false);
+  if (lastW < 50 && w >= 50 && board()) fitOpen();
   lastW = w;
 }).observe(canvas);
 document.addEventListener('gesturestart', e => e.preventDefault());
@@ -4364,10 +4413,15 @@ async function boot() {
   sessionStatus();
   calendarBoot();
   demoStatus();
-  Mem.ready.then(m => {
+  modelStatus();
+  Mem.ready.then(async m => {
     if (!m || S.touched || !Engine || !Engine.todayModel) return;
     const t = Engine.todayModel(m, new Date().toISOString(), madeFor());
-    if (t.sections.length) openToday();
+    if (t.sections.length) { openToday(); return; }
+    // Someone new, with the Cueboard app running: Today says where to start (the demo week, or
+    // connecting a calendar), rather than an example board they didn't ask for.
+    const fresh = !saved.length && !m.user && !m.meetings.length && !m.docs.length;
+    if (fresh && (await notesStatus()).server && !S.touched) openToday();
   });
   if (saved.length) {
     for (const b of saved) {
@@ -4381,7 +4435,7 @@ async function boot() {
     }
   } else if (!S.touched) setStatus('example');
   try { if (document.fonts && document.fonts.ready) await Promise.race([document.fonts.ready, sleep(1500)]); } catch (_) { }
-  if (!S.touched && !S.viewTouched && board().autoFit) fitAll(false);
+  if (!S.touched && !S.viewTouched && board().autoFit) fitOpen();
   S.booted = true;
   window.__cue = { S, els: () => els(), links: () => links() };
 }
