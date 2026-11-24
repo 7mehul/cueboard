@@ -96,6 +96,10 @@ const ICONS = {
   selectAll: '<path d="M4 7.5V5a1 1 0 011-1h2.5M16.5 4H19a1 1 0 011 1v2.5M20 16.5V19a1 1 0 01-1 1h-2.5M7.5 20H5a1 1 0 01-1-1v-2.5"/><path d="M8.5 12l2.3 2.3 4.7-4.6"/>',
   section: '<rect x="3.5" y="7.5" width="17" height="12.5" rx="2.5"/><path d="M3.5 4h7"/>',
   table: '<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M3.5 9.8h17M3.5 14.4h17M9.5 5v14"/>',
+  download: '<path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19.5h14"/>',
+  upload: '<path d="M12 15V4M7.5 8.5L12 4l4.5 4.5M5 19.5h14"/>',
+  print: '<path d="M7 9V4h10v5"/><rect x="4" y="9" width="16" height="7.5" rx="2"/><path d="M7 14h10v6H7z"/>',
+  share: '<path d="M12 4v11M7.5 8.5L12 4l4.5 4.5"/><path d="M5 12v6.5A1.5 1.5 0 006.5 20h11a1.5 1.5 0 001.5-1.5V12"/>',
   comment: '<path d="M4.5 6.5a2 2 0 012-2h11a2 2 0 012 2v8a2 2 0 01-2 2H11l-4.5 3.5V16.5h0a2 2 0 01-2-2z"/>',
   rowAdd: '<rect x="3.5" y="4" width="17" height="9" rx="1.5"/><path d="M12 15.5v5M9.5 18h5"/>',
   colAdd: '<rect x="4" y="3.5" width="9" height="17" rx="1.5"/><path d="M15.5 12h5M18 9.5v5"/>',
@@ -2366,6 +2370,19 @@ function openMenu(mode) {
       h('div', { class: 'row' },
         h('button', { class: 'btn solid-danger', type: 'button', onclick: () => { closeMenu(); deleteBoard(b.id); } }, 'Delete board'),
         h('button', { class: 'btn', type: 'button', onclick: () => openMenu() }, 'Cancel'))));
+  } else if (mode === 'share') {
+    const item = (icon, title, sub, fn) => h('button', { class: 'menu-item', type: 'button', role: 'menuitem', onclick: fn }, ic(icon), h('span', { class: 'mi-main' }, h('span', { class: 'mi-title', text: title }), sub ? h('span', { class: 'mi-sub', text: sub }) : null));
+    const has = els().length > 0;
+    menu.append(h('div', { class: 'menu-label', text: 'This board' }));
+    if (has) menu.append(
+      item('copy', 'Copy as text', 'To paste into an email or a doc', copyBoardText),
+      item('download', 'Download as a document', 'Markdown, in the order the meeting runs', downloadDoc),
+      item('print', 'Print or save as a PDF', 'The whole board on one page', printBoard));
+    menu.append(item('download', 'Download this board’s file', 'To open it in Cueboard on another computer', downloadBoardFile),
+      h('div', { class: 'menu-label', text: 'Everything in this browser' }),
+      item('download', 'Back up all boards and memory', 'One file, pictures included', backupAll),
+      item('upload', 'Open a backup or board file…', 'Restore a backup, or open someone’s board', openFile),
+      h('hr'), h('button', { class: 'menu-item', type: 'button', role: 'menuitem', onclick: () => openMenu() }, ic('undo'), h('span', { class: 'mi-main' }, h('span', { class: 'mi-title', text: 'Back to your boards' }))));
   } else if (mode === 'samples') {
     menu.append(h('div', { class: 'menu-label', text: 'Start from a meeting' }));
     for (const s of Engine ? Engine.samples() : []) {
@@ -2394,6 +2411,8 @@ function openMenu(mode) {
     }
     if (Engine) menu.append(h('button', { class: 'menu-item', type: 'button', role: 'menuitem', onclick: () => openMenu('samples') }, ic('calendar'), h('span', { class: 'mi-main' }, h('span', { class: 'mi-title', text: 'New board from a meeting…' }), h('span', { class: 'mi-sub', text: 'Sample meetings until your calendar is connected' }))));
     if (!S.boards['b-example']) menu.append(h('button', { class: 'menu-item', type: 'button', role: 'menuitem', onclick: () => { closeMenu(); const ex = makeExample(); S.boards[ex.id] = ex; switchBoard(ex.id); } }, ic('spark'), h('span', { class: 'mi-main' }, h('span', { class: 'mi-title', text: 'Open the example board' }))));
+    if (els().length) menu.append(h('button', { class: 'menu-item', type: 'button', role: 'menuitem', onclick: openRecap }, ic('send'), h('span', { class: 'mi-main' }, h('span', { class: 'mi-title', text: 'Write the recap…' }), h('span', { class: 'mi-sub', text: 'After the call: the email to send' }))));
+    menu.append(h('button', { class: 'menu-item', type: 'button', role: 'menuitem', onclick: () => openMenu('share') }, ic('share'), h('span', { class: 'mi-main' }, h('span', { class: 'mi-title', text: 'Export and back up…' }), h('span', { class: 'mi-sub', text: 'As text, a document or a PDF; backups' }))));
     menu.append(h('button', { class: 'menu-item', type: 'button', role: 'menuitem', onclick: () => openMenu('delete') }, ic('trash'), h('span', { class: 'mi-main' }, h('span', { class: 'mi-title', text: 'Delete this board…' }))));
     // AGPL-3.0: whoever runs Cueboard for others offers them its source. Point this at your fork if you change it.
     if (SERVER.locked) menu.append(h('button', { class: 'menu-item', type: 'button', role: 'menuitem', onclick: signOut }, ic('back'), h('span', { class: 'mi-main' }, h('span', { class: 'mi-title', text: 'Sign out' }), h('span', { class: 'mi-sub', text: 'Your boards stay in this browser' }))));
@@ -4123,6 +4142,7 @@ function boardJSON() {
     if (e.type === 'ink') o.strokes = e.strokes.length;
     if (e.group) o.group = e.group;
     if (e.rot) o.rot = e.rot;
+    if (e.live) o.live = true;
     return o;
   });
   const ls = links().filter(l => l.from.id && l.to.id).map(l => Object.assign({ from: l.from.id, to: l.to.id }, l.label ? { label: l.label } : {}));
@@ -4394,6 +4414,272 @@ $('#as-form').addEventListener('submit', e => { e.preventDefault(); submitAsk();
 $('#as-close').addEventListener('click', () => setAssistant(false));
 $('#b-ai').addEventListener('click', () => setAssistant(!S.asOpen));
 $('#b-comments').addEventListener('click', () => sendComments(openComments()));
+
+/* ================= export ================= */
+// Getting a board out: as text to paste, a document to keep, a page to print or save as a PDF,
+// the recap to send after the call, and files to back everything up or carry a board to
+// another browser. Boards live in this browser, so a backup is the only copy anywhere else.
+const fileName = (t, ext) => (String(t || 'board').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'board') + ext;
+async function saveFile(name, data, type) {
+  const dl = await useCap('downloads');
+  if (dl) { try { await dl.save({ filename: name, data }); return true; } catch (_) { return false; } }
+  const url = URL.createObjectURL(new Blob([data], { type: type || 'text/plain;charset=utf-8' }));
+  const a = h('a', { href: url, download: name, hidden: true });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+  return true;
+}
+
+/* ---------- as text ---------- */
+// Markdown, in the order the meeting runs: the plan's parts with what's under each, then the
+// rest, each section under its name, the notes from the call, and what connects to what. Where a
+// line came from stays with it.
+const cellMd = t => String(t || '').replace(/\|/g, '\\|').replace(/\n/g, ' ');
+const srcMd = c => (c ? ` _(${c.map(x => x.label + (x.date ? ' · ' + x.date : '')).join('; ')})_` : '');
+function elMarkdown(e) {
+  const out = [], lines = ls => ls.filter(l => l.text.trim()).map(l => `- ${l.label ? `**${l.label}:** ` : ''}${l.text}${srcMd(l.cite)}`);
+  switch (e.type) {
+    case 'text': if (e.text.trim()) out.push(e.size === 'h1' ? '# ' + e.text : e.size === 'h2' ? '## ' + e.text : e.text); break;
+    case 'card': {
+      if (e.live) { out.push('## Notes from the meeting', ...lines(e.lines)); break; }
+      const part = PHASE_TAG.test(e.tag || '');
+      out.push(`${part ? '##' : '###'} ${e.title || e.tag || 'Card'}${part ? ` (${e.tag})` : e.tag && e.title ? ` · ${e.tag}` : ''}`, ...lines(e.lines));
+      break;
+    }
+    case 'person': out.push(`### ${e.name || 'Someone'}`, ...lines(e.lines)); break;
+    case 'note': if (e.title) out.push(`### ${e.title}`); if (e.text.trim()) out.push(e.text + srcMd(e.cite)); break;
+    case 'list': out.push(`### ${e.title || 'Checklist'}`, ...e.items.filter(i => i.text.trim()).map(i => `- [${i.done ? 'x' : ' '}] ${i.text}${srcMd(i.cite)}`)); break;
+    case 'table': {
+      const [head, ...rows] = e.cells;
+      if (e.title) out.push(`### ${e.title}`);
+      out.push(`| ${head.map(cellMd).join(' | ')} |`, `|${head.map(() => ' --- ').join('|')}|`, ...rows.map(r => `| ${r.map(cellMd).join(' | ')} |`));
+      break;
+    }
+    case 'stat': out.push(`- **${e.label || 'Number'}:** ${e.value}${e.note ? ` (${e.note})` : ''}${srcMd(e.cite)}`); break;
+    case 'chart': out.push(`### ${e.title || 'Chart'}`, ...e.data.map(d => `- ${d.label}: ${fmtV(e, d.value)}`), ...(e.caption ? [`_${e.caption}_`] : [])); break;
+    case 'timeline': out.push(`### ${e.title || 'Timeline'}`, ...e.events.filter(v => !v.today).map(v => `- ${v.when ? v.when + ' · ' : ''}${v.label}`), ...lines(e.lines)); break;
+    case 'shape': if (e.text.trim()) out.push(e.text); break;
+    case 'image': out.push(`_Image${e.alt ? ': ' + e.alt : ''}_`); break;
+  }
+  return out.join('\n');
+}
+function boardMarkdown() {
+  const b = board(), all = els().filter(e => e.type !== 'ink');
+  const h1 = all.find(e => e.type === 'text' && e.size === 'h1');
+  const blocks = [`# ${plainOf(h1 ? h1.text : b.title)}`];
+  const items = all.filter(e => !isSec(e) && e !== h1 && !e.live), parts = phaseCards(items);
+  // Each outermost section is named before the first thing in it, unless a part of the plan in it
+  // already says what it is.
+  const secs = all.filter(isSec).filter(s => !all.some(o => isSec(o) && o !== s && inSection(o, s)));
+  const secOf = new Map();
+  for (const s of secs) for (const e of contentsOf([s])) if (!secOf.has(e.id)) secOf.set(e.id, s);
+  let order;
+  if (parts.length >= 2) {
+    // What sits above the plan (the meeting's details, what it's for) leads; then the plan's parts
+    // in order, each with what's under it; then the rest.
+    const top = Math.min(...parts.map(x => x.e.y));
+    const lead = readingOrder(items.filter(e => e.y + sizeOf(e).h <= top + 4));
+    const rest = items.filter(e => !lead.includes(e));
+    order = lead.concat(planOrder(rest) || readingOrder(rest));
+  } else {
+    const loose = readingOrder(items.filter(e => !secOf.has(e.id)));
+    order = loose.concat(...readingOrder(secs).map(s => readingOrder(items.filter(e => secOf.get(e.id) === s))));
+  }
+  const named = new Set();
+  for (const e of order) {
+    const s = secOf.get(e.id);
+    if (s && !named.has(s.id)) {
+      named.add(s.id);
+      if (!parts.some(x => secOf.get(x.e.id) === s)) blocks.push(`## ${s.title || 'Section'}`);
+    }
+    const m = elMarkdown(e); if (m) blocks.push(m);
+  }
+  for (const e of all.filter(e => e.live)) { const m = elMarkdown(e); if (m) blocks.push(m); }
+  const label = id => { const e = byId(id); return e ? labelOf(e) || e.type : '?'; };
+  const ls = links().filter(l => l.from.id && l.to.id);
+  if (ls.length) blocks.push(['## Connections', ...ls.map(l => `- ${label(l.from.id)} → ${label(l.to.id)}${l.label ? ': ' + l.label : ''}`)].join('\n'));
+  blocks.push(`_From Cueboard, ${new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' })}_`);
+  return blocks.join('\n\n') + '\n';
+}
+async function copyBoardText() {
+  closeMenu();
+  try { await navigator.clipboard.writeText(boardMarkdown()); toast('Copied the board as text, ready to paste into an email or a doc'); }
+  catch (_) { toast('Couldn’t copy here. Download it as a document instead.'); }
+}
+async function downloadDoc() {
+  closeMenu();
+  if (await saveFile(fileName(board().title, '.md'), boardMarkdown(), 'text/markdown;charset=utf-8')) toast('Downloaded the board as a document (Markdown)');
+}
+
+/* ---------- print, or save as a PDF ---------- */
+// The whole board on one landscape page, in light colors and without the controls. The print
+// dialog saves it as a PDF too; Cmd/Ctrl+P does the same as the menu.
+const PRINT = { saved: null };
+window.addEventListener('beforeprint', () => {
+  if (!board() || PRINT.saved) return;
+  PRINT.saved = { view: Object.assign({}, S.view), theme: document.documentElement.getAttribute('data-theme') };
+  setSelection([]); closePop();
+  document.documentElement.setAttribute('data-theme', 'light');
+  document.body.classList.add('printing');
+  const r = rectOf(els()) || { x: 0, y: 0, w: 1, h: 1 }, W = 1000, H = 680, pad = 12;
+  const z = Math.min((W - 2 * pad) / Math.max(1, r.w), (H - 2 * pad) / Math.max(1, r.h), 1.25);
+  world.style.transform = `translate(${(W - r.w * z) / 2 - r.x * z}px, ${(H - r.h * z) / 2 - r.y * z}px) scale(${z})`;
+  world.style.setProperty('--z', z);
+});
+window.addEventListener('afterprint', () => {
+  const p = PRINT.saved; if (!p) return;
+  PRINT.saved = null;
+  document.body.classList.remove('printing');
+  if (p.theme == null) document.documentElement.removeAttribute('data-theme'); else document.documentElement.setAttribute('data-theme', p.theme);
+  setView(p.view);
+});
+function printBoard() { closeMenu(); setTimeout(() => window.print(), 60); }
+
+/* ---------- the recap ---------- */
+// After the call: the email to send. Claude drafts it from the board and the notes taken during
+// the meeting; without Claude, a draft is laid out from the board alone. Either way it's edited
+// here and copied out: nothing is sent from Cueboard.
+const firstNames = names => names.length < 2 ? names[0] || '' : names.slice(0, -1).join(', ') + ' and ' + names.at(-1);
+function recapRules() {
+  const b = board(), all = els(), me = Mem.data && Mem.data.user;
+  const people = all.filter(e => e.type === 'person').map(e => (e.name || '').trim().split(/\s+/)[0]).filter(Boolean);
+  const key = all.find(e => e.type === 'card' && /what this meeting is for|key notes/i.test(`${e.title} ${e.tag}`));
+  const goal = key && key.lines.find(l => /goal/i.test(l.label || '') && l.text.trim() && !l.gap);
+  const live = all.filter(e => e.live).flatMap(e => e.lines.map(l => l.text)).filter(t => t.trim());
+  const parts = phaseCards(all).map(x => x.e.title).filter(Boolean);
+  const owed = all.filter(e => e.type === 'timeline').flatMap(e => e.lines.map(l => l.text)).filter(t => /^[^:]{1,30}:\s/.test(t) && !/\(done/i.test(t));
+  // "Halyard Ventures follow-up" is the meeting; the email follows up on "Halyard Ventures".
+  const about = plainOf(b.title).replace(/[\s:·-]*\b(?:follow[- ]?up|meeting|call|sync|check-?in|intro)\s*$/i, '').trim() || plainOf(b.title);
+  const untitled = /^untitled\b/i.test(plainOf(b.title));
+  const L = [untitled ? 'Subject: Following up on today' : `Subject: Following up: ${about}`, '', `Hi ${firstNames(people) || 'all'},`, '', 'Thanks for your time today. A quick recap:'];
+  if (goal) L.push('', `We met to ${plainOf(goal.text).replace(/^[A-Z]/, c => c.toLowerCase())}.`);
+  if (live.length) L.push('', 'What we discussed', ...live.map(t => '- ' + plainOf(t)));
+  else if (parts.length) L.push('', 'What we covered', ...parts.map(t => '- ' + plainOf(t)));
+  if (owed.length) L.push('', 'Next steps', ...owed.map(t => '- ' + plainOf(t)));
+  L.push('', 'Best,', me && me.name ? me.name.trim().split(/\s+/)[0] : '[your name]');
+  return L.join('\n');
+}
+async function recapClaude() {
+  const s = AI.sample || (await AI.ready); if (!s) return null;
+  const me = Mem.data && Mem.data.user && Mem.data.user.name;
+  const prompt = `Write the follow-up email to send after this meeting, from the board below and the notes taken during it (the card marked live).
+Plain text. The first line is "Subject: ...". Then a one-line thank-you; what was agreed or learned; next steps, each with who does it and by when where the board says; anything still open. Under 180 words, warm and direct, in the first person${me ? ` as ${me}` : ''}, signed with a first name.
+Use only what's on the board. Where something isn't clear, write [check]. Don't mention the board or Cueboard. Reply with the email only.
+
+BOARD TITLE: ${board().title}
+BOARD (JSON):
+${boardJSON()}`;
+  const r = await s(prompt, { cache: false, modelTier: 'quick' });
+  const t = r && typeof r.text === 'string' ? r.text.trim() : '';
+  // A model that answers in the board's JSON shape (the demo's stand-in) hasn't written a recap.
+  return t && !/^[{[]/.test(t) ? t : null;
+}
+// The demo's stand-in only knows the demo's documents: it can't write an email.
+const writesRecap = () => aiReady() && !(MODEL.status && MODEL.status.model === 'fake');
+async function openRecap() {
+  closeMenu(); blurField();
+  if (!board() || !els().length) { toast('Nothing on this board to recap yet'); return; }
+  R = { mode: 'recap', busy: false }; sheet.hidden = false;
+  const draw = (text, by) => {
+    R.busy = false;
+    const ta = h('textarea', { class: 'in sh-ta rc-ta', rows: 16, 'aria-label': 'The recap', spellcheck: 'true' });
+    ta.value = text;
+    const copy = async () => { try { await navigator.clipboard.writeText(ta.value); toast('Copied the recap. Paste it into an email.'); } catch (_) { ta.select(); toast('Select it all and copy'); } };
+    sheetFrame('The recap', by === 'claude' ? 'Drafted by Claude from the board and your notes from the call. Check it before you send it.'
+      : 'Laid out from the board and your notes from the call. Edit it, then copy it into an email.', [ta],
+      [writesRecap() && by !== 'claude' ? h('button', { class: 'btn', type: 'button', onclick: viaClaude }, ic('spark'), 'Draft it with Claude') : null,
+        h('button', { class: 'btn', type: 'button', onclick: () => saveFile(fileName(board().title + ' recap', '.md'), ta.value, 'text/markdown;charset=utf-8') }, ic('download'), 'Download'),
+        h('button', { class: 'btn primary', type: 'button', onclick: copy }, ic('copy'), 'Copy')]);
+  };
+  const viaClaude = async () => {
+    R.busy = true;
+    sheetFrame('The recap', null, [h('p', { class: 'sh-progress', text: 'Claude is drafting the recap…' })], null);
+    let t = null;
+    try { t = await recapClaude(); } catch (_) { }
+    if (R.mode !== 'recap') return;
+    if (t) draw(t, 'claude'); else { draw(recapRules(), 'rules'); toast('Claude couldn’t draft it just now, so this one is laid out from the board'); }
+  };
+  if (writesRecap()) viaClaude(); else draw(recapRules(), 'rules');
+}
+
+/* ---------- backups and board files ---------- */
+// Pictures kept in this browser travel inside the file, and go back into the browser's store when
+// it's opened.
+async function imagesOf(list) {
+  const out = {};
+  for (const e of list) if (e.type === 'image' && /^idb:/.test(e.src) && !out[e.src]) { try { const b = await idbGet(e.src.slice(4)); if (b) out[e.src] = await blobToDataURL(b); } catch (_) { } }
+  return out;
+}
+async function withImages(raw, images) {
+  for (const e of raw.elements || []) {
+    if (!e || e.type !== 'image' || !images || typeof images[e.src] !== 'string' || !/^data:image\//.test(images[e.src])) continue;
+    try { const src = await Images.put(await (await fetch(images[e.src])).blob()); if (src) e.src = src; } catch (_) { }
+  }
+  return raw;
+}
+const keptBoards = () => Object.values(S.boards).filter(b => b.saved || b.elements.length);
+async function backupAll() {
+  closeMenu();
+  const bs = keptBoards();
+  const data = { cueboard: 'backup', version: 1, at: new Date().toISOString(), boards: bs.map(b => Object.assign({ id: b.id }, serialize(b))), memory: Mem.data || null, images: await imagesOf(bs.flatMap(b => b.elements)) };
+  if (await saveFile(`cueboard-backup-${today()}.json`, JSON.stringify(data), 'application/json')) toast(`Backed up ${bs.length} ${bs.length === 1 ? 'board' : 'boards'}${Mem.data ? ' and memory' : ''} to one file. Keep it somewhere safe.`);
+}
+async function downloadBoardFile() {
+  closeMenu();
+  const b = board();
+  const data = { cueboard: 'board', version: 1, at: new Date().toISOString(), board: Object.assign({ id: b.id }, serialize(b)), images: await imagesOf(b.elements) };
+  if (await saveFile(fileName(b.title, '.cueboard.json'), JSON.stringify(data), 'application/json')) toast('Downloaded this board as a file. Open it in Cueboard anywhere to carry on.');
+}
+function pickFile(accept) {
+  return new Promise(ok => {
+    const i = h('input', { type: 'file', accept, hidden: true });
+    document.body.append(i);
+    i.addEventListener('change', () => { const f = i.files && i.files[0]; i.remove(); ok(f || null); });
+    i.click();
+  });
+}
+// One way in for both kinds of file: a board opens as a new board; a backup asks first.
+async function openFile() {
+  closeMenu();
+  const f = await pickFile('.json,application/json'); if (!f) return;
+  let data = null;
+  try { data = f.size < 60e6 ? JSON.parse(await f.text()) : null; } catch (_) { }
+  if (data && data.cueboard === 'backup' && Array.isArray(data.boards)) { confirmRestore(data); return; }
+  if (!data || data.cueboard !== 'board' || !data.board || typeof data.board !== 'object') { toast('That isn’t a Cueboard board or backup file'); return; }
+  const b = normalizeBoard(await withImages(Object.assign({}, data.board, { id: rid('b-') }), data.images));
+  if (!b) { toast('That board file couldn’t be read'); return; }
+  b.updatedAt = Date.now(); b.example = false;
+  S.boards[b.id] = b; switchBoard(b.id); scheduleSave(b.id);
+  toast(`Opened “${b.title}”`);
+}
+function confirmRestore(data) {
+  const bs = data.boards.filter(b => b && typeof b.id === 'string');
+  const mem = data.memory && typeof data.memory === 'object' ? data.memory : null;
+  const people = mem && Array.isArray(mem.people) ? mem.people.length : 0;
+  const emptyHere = !Mem.data || (!Mem.data.people.length && !Mem.data.meetings.length);
+  R = { mode: 'restore', busy: false }; sheet.hidden = false;
+  const box = h('input', { type: 'checkbox', id: 'rs-mem', checked: !!mem && emptyHere });
+  const when = isFinite(Date.parse(data.at)) ? new Date(data.at).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : 'an earlier date';
+  sheetFrame('Restore from a backup', `Made ${when}: ${bs.length} ${bs.length === 1 ? 'board' : 'boards'}${mem ? (people ? `, and memory of ${people} ${people === 1 ? 'person' : 'people'}` : ', and memory') : ''}.`,
+    [h('p', { class: 'rs-p', text: 'Its boards are added to the ones in this browser. A board that’s in both is replaced by the backup’s copy.' }),
+      mem ? h('label', { class: 'td-check rs-mem', for: 'rs-mem' }, box, h('span', { text: emptyHere ? 'Also restore its memory: the people, meetings and promises Cueboard knows.' : 'Also replace this browser’s memory with the backup’s. What this browser has learned since the backup is lost.' })) : null],
+    [h('button', { class: 'btn', type: 'button', onclick: closeSheet }, 'Cancel'), h('button', { class: 'btn primary', type: 'button', onclick: () => doRestore(data, !!mem && box.checked) }, 'Restore')]);
+}
+async function doRestore(data, withMem) {
+  R.busy = true;
+  let n = 0, last = null;
+  for (const raw of data.boards.slice(0, 200)) {
+    if (!raw || typeof raw.id !== 'string') continue;
+    const b = normalizeBoard(await withImages(JSON.parse(JSON.stringify(raw)), data.images)); if (!b) continue;
+    S.boards[b.id] = b; dirty.add(b.id); n++;
+    if (!last || b.updatedAt > last.updatedAt) last = b;
+  }
+  flush();
+  if (withMem && Engine && Engine.reviveMemory) { Mem.data = Engine.reviveMemory(data.memory, 'me'); await saveMemory(); }
+  R.busy = false; closeSheet();
+  if (last) switchBoard(last.id);
+  toast(`Restored ${n} ${n === 1 ? 'board' : 'boards'}${withMem ? ' and memory' : ''}`);
+}
 
 /* ================= toast ================= */
 let toastT = null;
@@ -5006,6 +5292,7 @@ $('#b-tidy').addEventListener('blur', () => showIssues(false));
 $('#b-glance').addEventListener('click', () => { exitPen(); enterGlance(); });
 $('#b-float').addEventListener('click', () => { exitPen(); toggleFloat(); });
 $('#g-float').addEventListener('click', () => toggleFloat());
+$('#g-recap').addEventListener('click', () => openRecap());
 $('#b-menu').addEventListener('click', () => { if (menu.hidden) openMenu(); else closeMenu(); });
 $('#z-in').addEventListener('click', () => zoomAt(canvas.clientWidth / 2, canvas.clientHeight / 2, 1.2));
 $('#z-out').addEventListener('click', () => zoomAt(canvas.clientWidth / 2, canvas.clientHeight / 2, 1 / 1.2));
